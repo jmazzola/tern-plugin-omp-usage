@@ -1,0 +1,5 @@
+/* The omp composer bar keeps only the model chip and the send button. Extension statuses (the extras) show
+   above the context hairline instead (window.luau); the path and the session cost are dropped. */
+.sf-row[data-role='omp.composer.bar'] > :is([data-role='omp.composer.extras'], [data-role='omp.composer.usage'], .sf-place) {
+	display: none !important;
+}

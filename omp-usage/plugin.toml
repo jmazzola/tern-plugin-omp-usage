@@ -1,0 +1,8 @@
+schema = 1
+id = "omp-usage"
+name = "omp Usage"
+version = "0.1.0"
+description = "omp's usage-remaining status, above the omp composer's context hairline."
+icon = "gauge"
+window = "window.luau"
+styles = ["bar.css"]
