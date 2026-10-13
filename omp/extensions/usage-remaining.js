@@ -4,10 +4,12 @@
 // available credit expires within 5 days. Countdown is the earliest credit expiry.
 //
 // Shown for any model whose provider has an `omp usage` report with limits
-// (Anthropic, OpenAI Codex, Kimi, Gemini CLI, …); otherwise the status is
-// cleared. Tier/model-scoped windows (e.g. Codex Spark 5h, Claude Fable 7d)
-// are shown only when the active model belongs to that scope, so a missing
-// general window is never backfilled.
+// (Anthropic, OpenAI Codex, Kimi, Gemini CLI, Muse Code, …); otherwise the
+// status is cleared. Tier/model-scoped windows (e.g. Codex Spark 5h, Claude
+// Fable 7d) are shown only when the active model belongs to that scope, so a
+// missing general window is never backfilled; a scope none of the provider's
+// models belong to names its plan and applies to every model. Windows of any
+// length are shown: 5h, 1d, 7d and mo by name, others by their length.
 //
 // Footer wiring: put "status" in statusLine.leftSegments/rightSegments (that
 // segment renders ctx.ui.setStatus values).
@@ -88,18 +90,45 @@ function isTrackedProvider(provider) {
   return provider !== "";
 }
 
-function windowClassOf(limit) {
-  const scope = limit?.scope ?? {};
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+// A window's length as one token: `2h`, `3d`, `90m`.
+function spanLabel(ms) {
+  const mins = Math.round(ms / 60_000);
+  if (mins % 1440 === 0) return `${mins / 1440}d`;
+  if (mins % 60 === 0) return `${mins / 60}h`;
+  return `${mins}m`;
+}
+
+// A limit's window as { key, label, ms }: `key` keeps one limit per window on
+// a line, `label` is what the line shows and `ms` orders the windows. The
+// usual ones get fixed labels (5h, 1d, 7d, mo), matched by omp's id or their
+// length; any other is labeled by its length, else by omp's id for it, so an
+// unfamiliar window is shown rather than dropped.
+function windowOf(limit) {
   const window = limit?.window ?? {};
-  const windowId = scope.windowId;
-  const durationMs = typeof window.durationMs === "number" ? window.durationMs : undefined;
-  if (windowId === "5h" || windowId === "7d") return windowId;
-  if (windowId === "daily" || windowId === "24h" || windowId === "1d") return "daily";
-  if (windowId === "monthly" || windowId === "30d") return "monthly";
-  if (durationMs !== undefined && Math.abs(durationMs - 5 * 3_600_000) <= 60_000) return "5h";
-  if (durationMs !== undefined && Math.abs(durationMs - 86_400_000) <= 60_000) return "daily";
-  if (durationMs !== undefined && Math.abs(durationMs - 7 * 86_400_000) <= 60_000) return "7d";
-  return undefined;
+  const windowId = limit?.scope?.windowId ?? window.id;
+  const durationMs = typeof window.durationMs === "number" && window.durationMs > 0 ? window.durationMs : undefined;
+  const near = (ms) => durationMs !== undefined && Math.abs(durationMs - ms) <= 60_000;
+  if (windowId === "5h" || near(5 * HOUR_MS)) return { key: "5h", label: "5h", ms: 5 * HOUR_MS };
+  if (windowId === "daily" || windowId === "24h" || windowId === "1d" || near(DAY_MS)) {
+    return { key: "daily", label: "1d", ms: DAY_MS };
+  }
+  if (windowId === "7d" || near(7 * DAY_MS)) return { key: "7d", label: "7d", ms: 7 * DAY_MS };
+  if (
+    windowId === "monthly" ||
+    windowId === "30d" ||
+    (durationMs !== undefined && durationMs >= 28 * DAY_MS && durationMs <= 31 * DAY_MS)
+  ) {
+    return { key: "monthly", label: "mo", ms: 30 * DAY_MS };
+  }
+  if (durationMs !== undefined) {
+    const label = spanLabel(durationMs);
+    return { key: label, label, ms: durationMs };
+  }
+  const id = typeof windowId === "string" ? windowId.trim().replace(/\s+/g, "-") : "";
+  return id ? { key: id, label: id, ms: Infinity } : undefined;
 }
 
 function fmtResetShort(ms) {
@@ -115,7 +144,8 @@ function fmtResetShort(ms) {
 }
 
 // One-word labels: the line's first word names its provider (the Tern plugin
-// keys colors and change animations on it).
+// keys colors and change animations on it). Providers not listed get one from
+// their id (see shortProvider).
 const PROVIDER_LABELS = {
   anthropic: "Claude",
   "openai-codex": "Codex",
@@ -130,8 +160,16 @@ const PROVIDER_LABELS = {
   devin: "Devin",
 };
 
+// Words in provider ids that name the product or plan, not the provider.
+const GENERIC_ID_WORDS = new Set(["api", "cli", "code", "coding", "plan", "subscription", "token"]);
+
+// A provider's label: its listed one, else the first word of its id that names
+// it, capitalized (`muse-code` reads `Muse`, `zai-coding-plan` `Zai`).
 function shortProvider(provider) {
-  return PROVIDER_LABELS[provider] ?? (provider.replace(/\s+/g, "-") || "");
+  const known = PROVIDER_LABELS[provider];
+  if (known) return known;
+  const word = provider.split(/[^a-z0-9]+/i).find((w) => w && !GENERIC_ID_WORDS.has(w.toLowerCase()));
+  return word ? word[0].toUpperCase() + word.slice(1) : provider.replace(/\s+/g, "-");
 }
 
 function pickReport(reports, activeProvider) {
@@ -141,17 +179,52 @@ function pickReport(reports, activeProvider) {
   return withLimits.find((r) => String(r.provider).toLowerCase() === activeProvider) ?? null;
 }
 
-// A limit scoped to a tier/model (e.g. Codex Spark 5h) only applies when the
-// active model belongs to that scope; plan-wide limits carry no such scope.
-function limitApplies(limit, activeBare) {
+// The bare ids of each provider's available models (ctx.models.list()), by
+// provider; null when the list isn't known.
+function modelIndex(models) {
+  if (!Array.isArray(models)) return null;
+  const index = new Map();
+  for (const m of models) {
+    const { provider, bare } = identity(m);
+    if (!provider || !bare) continue;
+    if (!index.has(provider)) index.set(provider, []);
+    index.get(provider).push(bare);
+  }
+  return index;
+}
+
+function scopeText(value) {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "";
+}
+
+// Whether model `bare` belongs to a tier/model scope.
+function inScope(modelId, tier, bare) {
+  if (!bare) return false;
+  if (modelId && bare !== modelId && !bare.includes(modelId)) return false;
+  return !tier || bare.includes(tier);
+}
+
+// A limit scoped to a tier/model (e.g. Codex Spark 5h, Claude Fable 7d) only
+// applies when the active model belongs to that scope. A limit is plan-wide,
+// applying to every model, when it has no such scope, when omp marks it
+// shared (as omp itself treats them; Muse Code's tier is its plan name), or
+// when none of its provider's models belong to its scope, which then names
+// something other than a model. `bares`: the provider's model ids, undefined
+// when they aren't known.
+function limitApplies(limit, activeBare, bares) {
   const scope = limit?.scope ?? {};
-  const rawModel = "modelId" in scope ? scope.modelId : undefined;
-  const rawTier = "tier" in scope ? scope.tier : undefined;
-  const modelId = typeof rawModel === "string" && rawModel.trim() ? rawModel.trim().toLowerCase() : "";
-  const tier = typeof rawTier === "string" && rawTier.trim() ? rawTier.trim().toLowerCase() : "";
-  if (modelId && (!activeBare || (activeBare !== modelId && !activeBare.includes(modelId)))) return false;
-  if (tier && (!activeBare || !activeBare.includes(tier))) return false;
-  return true;
+  const modelId = scopeText(scope.modelId);
+  const tier = scopeText(scope.tier);
+  if (scope.shared === true || (!modelId && !tier)) return true;
+  if (bares && !bares.some((b) => inScope(modelId, tier, b))) return true;
+  return inScope(modelId, tier, activeBare);
+}
+
+// The test for which of a report's limits count toward model `bare` ("" for
+// the provider's plan-wide windows), given modelIndex's index.
+function appliesTo(report, bare, index) {
+  const bares = index ? (index.get(String(report.provider).toLowerCase()) ?? []) : undefined;
+  return (limit) => limitApplies(limit, bare, bares);
 }
 
 // Saved resets restore a blocked short window. Credits that list the limit ids
@@ -190,8 +263,8 @@ function expiringResetLeft(report, limit, wc, now) {
 // The saved resets counted on a model's 7d window, soonest expiry first, as
 // [{ expiresAt (epoch ms), count }]. Same credit filter as expiringResetLeft,
 // without the 5-day warning window.
-function savedResets(report, bare) {
-  const limit = (report.limits ?? []).find((l) => limitApplies(l, bare) && windowClassOf(l) === "7d");
+function savedResets(report, applies) {
+  const limit = (report.limits ?? []).find((l) => applies(l) && windowOf(l)?.key === "7d");
   if (!limit) return [];
   const credits = Array.isArray(report.resetCredits?.credits) ? report.resetCredits.credits : [];
   const now = Date.now();
@@ -206,13 +279,13 @@ function savedResets(report, bare) {
   return out.sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
-function renderRemaining(report, activeBare) {
+function renderRemaining(report, applies) {
   const now = Date.now();
   const seen = new Map();
   for (const limit of report.limits) {
-    if (!limitApplies(limit, activeBare)) continue;
-    const wc = windowClassOf(limit);
-    if (!wc || seen.has(wc)) continue;
+    if (!applies(limit)) continue;
+    const w = windowOf(limit);
+    if (!w || seen.has(w.key)) continue;
     const amount = limit.amount ?? {};
     const remainingFrac =
       typeof amount.remainingFraction === "number"
@@ -221,11 +294,11 @@ function renderRemaining(report, activeBare) {
           ? 1 - amount.usedFraction
           : undefined;
     if (typeof remainingFrac !== "number") continue;
-    const pct = wc === "monthly" ? Math.floor(remainingFrac * 100) : Math.round(remainingFrac * 100);
+    const pct = w.key === "monthly" ? Math.floor(remainingFrac * 100) : Math.round(remainingFrac * 100);
     const filled = Math.round(Math.min(1, Math.max(0, remainingFrac)) * 8);
     const meter = `${"\u2588".repeat(filled)}${"\u2591".repeat(8 - filled)}`;
-    const stash = wc === "7d" ? stashFor(report, limit, wc) : 0;
-    const expiryLeft = stash > 0 ? expiringResetLeft(report, limit, wc, now) : undefined;
+    const stash = w.key === "7d" ? stashFor(report, limit, w.key) : 0;
+    const expiryLeft = stash > 0 ? expiringResetLeft(report, limit, w.key, now) : undefined;
     const extra = stash <= 0
       ? ""
       : expiryLeft === undefined
@@ -233,23 +306,26 @@ function renderRemaining(report, activeBare) {
         : ` (!${stash} - ${fmtResetShort(expiryLeft)} left)`;
     const resetsAt = limit.window?.resetsAt;
     const reset = typeof resetsAt === "number" ? ` (${fmtResetShort(resetsAt - now)})` : "";
-    const label = wc === "daily" ? "1d" : wc === "monthly" ? "mo" : wc;
-    seen.set(wc, `${label} ${meter} ${pct}% left${reset}${extra}`);
+    seen.set(w.key, { ms: w.ms, text: `${w.label} ${meter} ${pct}% left${reset}${extra}` });
   }
   if (!seen.size) return undefined;
-  const order = ["5h", "daily", "7d", "monthly"];
-  const parts = [...seen.entries()]
-    .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
-    .map(([, t]) => t);
+  const parts = [...seen.values()]
+    .sort((a, b) => (a.ms === b.ms ? 0 : a.ms < b.ms ? -1 : 1))
+    .map((p) => p.text);
   return `${shortProvider(report.provider)} ${parts.join(" · ")}`;
 }
 
 // The status for a model from fetched reports; "" when its provider isn't
-// tracked or has no report.
-function lineFor(reports, provider, bare) {
+// tracked or has no report. With no model (`bare` ""), the provider's
+// plan-wide windows; a provider whose limits are all scoped to some of its
+// models shows those instead, so a provider with limits is never left out.
+function lineFor(reports, provider, bare, index) {
   if (!isTrackedProvider(provider)) return "";
   const report = pickReport(reports, provider);
-  return (report && renderRemaining(report, bare)) || "";
+  if (!report) return "";
+  const line = renderRemaining(report, appliesTo(report, bare, index));
+  if (line || bare) return line || "";
+  return renderRemaining(report, () => true) || "";
 }
 
 // Draws the status for the active model from the last fetched reports. With
@@ -263,7 +339,7 @@ function render(state, ctx) {
   }
   const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
   if (!reports) return;
-  ctx.ui.setStatus(STATUS_KEY, lineFor(reports, provider, bare) || undefined);
+  ctx.ui.setStatus(STATUS_KEY, lineFor(reports, provider, bare, modelIndex(state.models)) || undefined);
 }
 
 // Writes LINES_FILE:
@@ -272,13 +348,13 @@ function render(state, ctx) {
 //   Two models sharing a chip name but not an entry can't be told apart from
 //   the chip: they get null, and the plugin keeps the main status.
 // - providers: every tracked provider with limits, keyed by provider id, in
-//   report order, as { label, line, resets } for its plan-wide windows only
-//   (no model is given, so tier/model-scoped windows are left out).
-async function writeLines(state, ctx) {
+//   report order, as { label, line, resets } for its plan-wide windows (see
+//   lineFor; no model is given, so tier/model-scoped windows are left out).
+async function writeLines(state) {
   const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
-  if (!reports) return;
-  const models = await ctx.models?.list?.();
-  if (!Array.isArray(models)) return;
+  const models = state.models;
+  if (!reports || !Array.isArray(models)) return;
+  const index = modelIndex(models);
   const entries = {};
   for (const m of models) {
     const name = chipName(m);
@@ -286,8 +362,8 @@ async function writeLines(state, ctx) {
     const { provider, bare } = identity(m);
     const report = isTrackedProvider(provider) ? pickReport(reports, provider) : null;
     const entry = {
-      line: lineFor(reports, provider, bare),
-      resets: report ? savedResets(report, bare) : [],
+      line: lineFor(reports, provider, bare, index),
+      resets: report ? savedResets(report, appliesTo(report, bare, index)) : [],
     };
     const same = name in entries && JSON.stringify(entries[name]) === JSON.stringify(entry);
     entries[name] = !(name in entries) || same ? entry : null;
@@ -297,9 +373,13 @@ async function writeLines(state, ctx) {
     const provider = String(r?.provider ?? "").toLowerCase();
     if (!isTrackedProvider(provider) || provider in providers) continue;
     const report = pickReport(reports, provider);
-    const line = lineFor(reports, provider, "");
+    const line = lineFor(reports, provider, "", index);
     if (!report || !line) continue;
-    providers[provider] = { label: shortProvider(provider), line, resets: savedResets(report, "") };
+    providers[provider] = {
+      label: shortProvider(provider),
+      line,
+      resets: savedResets(report, appliesTo(report, "", index)),
+    };
   }
   const body = JSON.stringify({ entries, providers });
   // Unchanged data is still rewritten now and then, so generatedAt tells readers the file is live.
@@ -319,8 +399,10 @@ async function update(state, ctx) {
     const data = await fetchUsageJson();
     // A failed fetch keeps the last good reports; the next poll retries.
     if (data && Array.isArray(data.reports)) state.data = data;
+    const models = await ctx.models?.list?.();
+    if (Array.isArray(models)) state.models = models;
     render(state, ctx);
-    await writeLines(state, ctx);
+    await writeLines(state);
   } catch {
     // Keep the last good value; the next poll retries.
   }
@@ -338,9 +420,9 @@ function checkModel(state, ctx) {
 }
 
 export default function usageRemaining(pi) {
-  // Per session: the last `omp usage --json` reports, the model last drawn and
-  // the lines last written to LINES_FILE, and when.
-  const state = { data: null, shownModel: undefined, writtenLines: undefined, writtenAt: 0 };
+  // Per session: the last `omp usage --json` reports and available models, the
+  // model last drawn and the lines last written to LINES_FILE, and when.
+  const state = { data: null, models: null, shownModel: undefined, writtenLines: undefined, writtenAt: 0 };
   pi.on("session_start", async (_event, ctx) => {
     await update(state, ctx);
     ctx.setInterval(() => {

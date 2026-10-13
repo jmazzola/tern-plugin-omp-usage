@@ -10,8 +10,9 @@ expires.
 ![The hover card: Claude's 5-hour and weekly windows with meters, reset times and a saved reset's expiry date](docs/images/card-current.png)
 
 - Shows the limits for the active model's provider (any provider `omp usage` reports: Claude, Codex, Kimi,
-  Gemini, …), and switches within about 2 s when you change models (Alt+P). While you view a subagent's
-  transcript, it shows the limits for that subagent's model.
+  Gemini, Muse Code, …), and switches within about 2 s when you change models (Alt+P). While you view a subagent's
+  transcript, it shows the limits for that subagent's model. Providers and windows come from omp's report, so a
+  new provider or an unfamiliar window (labeled by its length, e.g. `2h`) shows without changes here.
 - Or shows every provider at once, or the ones you choose, in the order you set (see [Settings](#settings)).
 - Each window gets a slim bar filled to the share left, with a lit tip, in its provider's colors: amber at 25%
   or less, red at 10% or less. In a narrow pane, windows that don't fit drop off whole.
