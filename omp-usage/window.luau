@@ -7,8 +7,9 @@
 -- extras, and after every fetch it also writes ~/.omp/cache/usage-remaining.json: every model's line keyed by
 -- the name omp's model chip shows, every provider's plan-wide line, and the saved resets' expiry dates. This
 -- plugin reads both from the focused agent pane and draws the line with CSS above the hairline's meter,
--- rewritten with `tern.css` when it changes; bar.css hides the extras in the bar. Other `ctx.ui.setStatus`
--- parts are kept, except the `◫ …` context gauge (context-used.js), which the hairline already shows.
+-- rewritten with `tern.css` when it changes. Other `ctx.ui.setStatus` parts are drawn there too, except the
+-- `◫ …` context gauge (context-used.js), which the hairline already shows. The rest of omp's status line (path,
+-- git, cost, …) stays in the bar; only the facts the line redraws are hidden there, in the focused pane.
 --
 -- What the line shows depends on the mode (kept in `tern.kv`, set from the settings panel or the `omp Usage:
 -- Settings…` picker): the focused agent's provider (`current`), every provider in the cache (`all`) or the
@@ -47,8 +48,10 @@
 local POLL_MS = 1000
 local SHEET = "usage"
 -- omp's composer bar extras: one `hook-N` fact per `ctx.ui.setStatus` key with `statusLine.showHookStatus`,
--- or one `status` fact (all keys joined) with the `status` statusline segment. Ids carry a generated prefix
--- (`k.` in omp 18.6, `3.` in 18.7), so they are matched by suffix inside the dock region, whose root id is `dock`.
+-- or one `status` fact (all keys joined) with the `status` statusline segment, beside the status line's own
+-- segments (branch, git, …). Ids carry a generated prefix (`k.` in omp 18.6, `3.` in 18.7), so they are matched
+-- by suffix inside the dock region, whose root id is `dock`. Tern renders each fact as a `.sf-seg` whose
+-- `data-id` is the fact's id, which is how the line's facts are hidden in the bar.
 local DOCK_ROOT = "dock"
 local EXTRAS_SUFFIX = "bar/extras"
 local FACT_PATTERNS = { "/status$", "/hook%-%d+$" }
@@ -183,7 +186,8 @@ type Model = {
 	title: string,
 	signature: string,
 }
-type Dock = { status: string?, chip: string?, viewing: boolean }
+-- `hide`: the ids of the status facts the line redraws, to hide in the bar.
+type Dock = { status: string?, chip: string?, viewing: boolean, hide: { string } }
 type Provider = { id: string, label: string, line: string, resets: { Reset } }
 type Entry = { line: string, resets: { Reset } }
 type Cache = { at: number, models: { [string]: Entry }, providers: { Provider }? }
@@ -267,10 +271,32 @@ local function role_is(role: string): (any) -> boolean
 	end
 end
 
--- From a dock tree (`cx.session:surface`'s answer): the status facts joined, the model chip's name, and whether
--- a subagent's transcript is being viewed.
+-- The status's ` · `-separated parts, without context-used.js's gauge.
+local function usage_pieces(status: string): { string }
+	local kept: { string } = {}
+	local start = 1
+	while true do
+		local i, j = string.find(status, SEPARATOR, start, true)
+		local piece = string.sub(status, start, if i then i - 1 else nil)
+		if piece ~= "" and string.sub(piece, 1, #CONTEXT_PREFIX) ~= CONTEXT_PREFIX then
+			table.insert(kept, piece)
+		end
+		if i == nil then
+			break
+		end
+		start = (j :: number) + 1
+	end
+	return kept
+end
+
+local function usage_part(status: string): string
+	return table.concat(usage_pieces(status), SEPARATOR)
+end
+
+-- From a dock tree (`cx.session:surface`'s answer): the status facts joined, the ones the line redraws, the
+-- model chip's name, and whether a subagent's transcript is being viewed.
 local function dock_facts(tree: any): Dock
-	local dock: Dock = { status = nil, chip = nil, viewing = false }
+	local dock: Dock = { status = nil, chip = nil, viewing = false, hide = {} }
 	if type(tree) ~= "table" then
 		return dock
 	end
@@ -285,6 +311,9 @@ local function dock_facts(tree: any): Dock
 				local text = fact_text(child)
 				if text ~= "" then
 					table.insert(parts, text)
+					if #usage_pieces(text) > 0 then
+						table.insert(dock.hide, child.id)
+					end
 				end
 			end
 		end
@@ -309,28 +338,6 @@ local function read_dock(cx: WindowCx, pane: number): Dock
 		return cx.session:surface(pane, { root = DOCK_ROOT })
 	end)
 	return dock_facts(if ok then tree else nil)
-end
-
--- The status's ` · `-separated parts, without context-used.js's gauge.
-local function usage_pieces(status: string): { string }
-	local kept: { string } = {}
-	local start = 1
-	while true do
-		local i, j = string.find(status, SEPARATOR, start, true)
-		local piece = string.sub(status, start, if i then i - 1 else nil)
-		if piece ~= "" and string.sub(piece, 1, #CONTEXT_PREFIX) ~= CONTEXT_PREFIX then
-			table.insert(kept, piece)
-		end
-		if i == nil then
-			break
-		end
-		start = (j :: number) + 1
-	end
-	return kept
-end
-
-local function usage_part(status: string): string
-	return table.concat(usage_pieces(status), SEPARATOR)
 end
 
 -- usage-remaining.js countdowns (`45m`, `2h 11m`, `5h`, `6d 4h`): minutes, and whether they are exact to the
@@ -1672,6 +1679,19 @@ local function sheet(model: Model, settings: Settings, p: Pulse?, hint: string):
 	return css
 end
 
+-- Hides the status facts the line redraws from the focused pane's bar, by their exact ids: `hook-N` numbers
+-- depend on which statuses a session has set, so another pane's `hook-1` may be another extension's.
+local function hide_css(ids: { string }): string
+	if #ids == 0 then
+		return ""
+	end
+	local selectors: { string } = {}
+	for _, id in ids do
+		table.insert(selectors, ".tn-pane.on [data-role='omp.composer.bar'] [data-id=" .. css_string(id) .. "]")
+	end
+	return table.concat(selectors, ",\n") .. " {\n\tdisplay: none !important;\n}\n"
+end
+
 local function install(css: string)
 	if css ~= last_css then
 		last_css = css
@@ -1785,10 +1805,11 @@ local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: 
 	last_dock = dock
 	local hint = settings_hint(cx)
 	local running = if pulse and tern.now() < pulse.until_ms then pulse.seq else 0
-	local key = table.concat({ model.signature, colors_key(settings), hint, tostring(running) }, "\n")
+	local hidden = table.concat(dock.hide, "\n")
+	local key = table.concat({ model.signature, colors_key(settings), hint, tostring(running), hidden }, "\n")
 	if key ~= sheet_key then
 		sheet_key = key
-		install(sheet(model, settings, pulse, hint))
+		install(hide_css(dock.hide) .. sheet(model, settings, pulse, hint))
 	end
 end
 
@@ -2180,7 +2201,7 @@ local PANEL_ROLE = "omp-usage.panel"
 local DOCK_ROLE = "omp-usage.panel-dock"
 local PANEL = "[data-role='" .. PANEL_ROLE .. "']"
 local PANEL_DOCK = "[data-role='" .. DOCK_ROLE .. "']"
-local NO_DOCK: Dock = { status = nil, chip = nil, viewing = false }
+local NO_DOCK: Dock = { status = nil, chip = nil, viewing = false, hide = {} }
 local ui = tern.ui
 
 local PANEL_CSS = fill(

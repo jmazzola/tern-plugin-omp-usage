@@ -26,7 +26,7 @@ expires.
 | Part | What it does |
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension. Fetches `omp usage --json`, sets the line as an omp extension status, and writes every model's and provider's line to a cache file. |
-| `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses in the bar, and adds the settings panel. |
+| `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses it redraws from the bar (the rest of omp's status line stays), keeps the session cost in the bar, and adds the settings panel. |
 
 Tested with Tern 0.8.0 and omp 18.9.2 on Windows.
 
@@ -71,7 +71,9 @@ extensions:
 ### 4. Let omp show extension statuses
 
 The extension's line reaches the composer bar as an extension status, where the plugin reads it (and hides it
-from the bar). Either keep `showHookStatus` on, which works with any status line preset:
+from the focused pane's bar; the rest of your status line, such as branch and git changes, stays, and the session
+cost is kept even when a long status line, like the `full` preset, fills the bar). Either keep `showHookStatus`
+on, which works with any status line preset:
 
 ```yaml
 statusLine:

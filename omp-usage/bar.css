@@ -1,5 +1,5 @@
-/* The omp composer bar keeps only the model chip and the send button. Extension statuses (the extras) show
-   above the context hairline instead (window.luau); the path and the session cost are dropped. */
-.sf-row[data-role='omp.composer.bar'] > :is([data-role='omp.composer.extras'], [data-role='omp.composer.usage'], .sf-place) {
-	display: none !important;
+/* Tern cuts the session cost from omp's composer bar before any status line segment, so with a long status line
+   (the `full` preset) it never shows. Keep it: Tern then drops the lowest-priority segments to make room. */
+.sf-row[data-role='omp.composer.bar'] > [data-role='omp.composer.usage'].sf-cut {
+	display: block !important;
 }
