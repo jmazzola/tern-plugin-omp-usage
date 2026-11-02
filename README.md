@@ -12,7 +12,9 @@ expires.
 - Shows the limits for the active model's provider (any provider `omp usage` reports: Claude, Codex, Kimi,
   Gemini, Muse Code, …), and switches within about 2 s when you change models (Alt+P). While you view a subagent's
   transcript, it shows the limits for that subagent's model. Providers and windows come from omp's report, so a
-  new provider or an unfamiliar window (labeled by its length, e.g. `2h`) shows without changes here.
+  new provider or an unfamiliar window (labeled by its length, e.g. `2h`) shows without changes here. A separate
+  meter on the plan, such as Claude's Fable weekly limit, shows beside the general window as its own (`FABLE 7D`)
+  whichever model is active; a limit for one model only, such as Codex Spark's, shows only while that model is.
 - Or shows every provider at once, or the ones you choose, in the order you set (see [Settings](#settings)).
 - Each window gets a slim bar filled to the share left, with a lit tip, in its provider's colors: amber at 25%
   or less, red at 10% or less. In a narrow pane, windows that don't fit drop off whole.
@@ -20,15 +22,15 @@ expires.
   provider's color when quota drops, green when it comes back.
 - Hover the line to lift it into a glass capsule; after a beat a card opens above it with each window, its
   meter, reset countdown and clock time, the expiry date of each saved reset, and the settings shortcut.
-- Change what it shows, the providers' order and their colors in a settings panel: Ctrl+Alt+U, or **usage**
-  in the status bar.
+- Change what it shows, the providers' order, which of each provider's windows show, and their colors in a
+  settings panel: Ctrl+Alt+U, or **usage** in the status bar.
 
 | Part | What it does |
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension. Fetches `omp usage --json`, sets the line as an omp extension status, and writes every model's and provider's line to a cache file. |
 | `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses it redraws from the bar (the rest of omp's status line stays), keeps the session cost in the bar, and adds the settings panel. |
 
-Tested with Tern 0.8.0 and omp 18.9.2 on Windows.
+Tested with Tern 0.9.9 and omp 18.15.0 on Windows.
 
 ## Requirements
 
@@ -112,7 +114,7 @@ that's open.
 | --- | --- |
 | Line | Previews the line as the composer shows it, for the last omp pane you used |
 | Show | **Current model**: the focused agent's provider (the default); while you view a subagent's transcript, its model's. **All providers**: every provider with limits, one after another; with several, the line drops the countdowns and the word `left` (the card has them). **Selected providers**: the ones switched on under Providers |
-| Providers | A row per provider, in the line's order. Its switch puts it in or takes it out of Selected providers, and shows those; its arrows move it one place, **top** moves it first |
+| Providers | A row per provider, in the line's order. Its windows are the ones your accounts report (e.g. Claude's `7D` and `FABLE 7D`): click one to hide it from the line and the card, everywhere and in every mode, and again to show it (a hidden one fades, its share struck through). A provider with every window hidden drops off the line. Its switch puts it in or takes it out of Selected providers, and shows those; its arrows move it one place, **top** moves it first |
 | Colors | Per provider: its preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), **Custom…** (one or two hex colors, like `#d97757` or `#9aa7b4, #5b8def`) and **Reset**. Point at a swatch for its name |
 
 ![The settings panel: a line preview, the Show choices, providers with switches and move buttons, and color swatches](docs/images/settings-panel.png)
@@ -122,7 +124,8 @@ menus, so the order is set with buttons.
 
 **omp Usage: Settings…** in the palette offers the same settings as menus, for the keyboard: Open settings
 panel…, Show, Choose providers… (the list stays open so you can check several; Esc closes it), Reorder
-providers… (pick a provider, then Move up, Move down, Move to top or Move to bottom) and Provider colors….
+providers… (pick a provider, then Move up, Move down, Move to top or Move to bottom), Provider colors… and
+Provider windows… (pick a provider, then check the windows to show; Esc closes it).
 
 The presets: Claude clay, Codex graphite to blue, OpenAI green, Kimi green, Gemini blue to white, Antigravity
 blue, MiniMax red to pink, Go cyan, Qwen purple, Devin teal. Other providers use the theme's accent. Whatever

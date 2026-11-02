@@ -165,12 +165,14 @@ local NAMED: { { key: string, palette: Palette } } = {
 }
 
 -- Settings in `tern.kv` (every window shares them, so each refresh reads them again): the mode, the providers
--- `selected` shows, color choices by provider id (`named:<key>`, or one or two `#rrggbb`), and the providers'
--- order (ids; providers it doesn't name follow in the preset order).
+-- `selected` shows, color choices by provider id (`named:<key>`, or one or two `#rrggbb`), the providers'
+-- order (ids; providers it doesn't name follow in the preset order) and the windows hidden from the line, by
+-- provider id (lowercased window labels: `5h`, `fable 7d`).
 local KV_MODE = "omp-usage.mode"
 local KV_SELECTED = "omp-usage.selected"
 local KV_COLORS = "omp-usage.colors"
 local KV_ORDER = "omp-usage.order"
+local KV_HIDDEN = "omp-usage.hidden"
 
 type Window = { label: string, pct: number, reset: string?, saved: number?, expires: string? }
 type Reset = { at: number, count: number }
@@ -188,10 +190,17 @@ type Model = {
 }
 -- `hide`: the ids of the status facts the line redraws, to hide in the bar.
 type Dock = { status: string?, chip: string?, viewing: boolean, hide: { string } }
-type Provider = { id: string, label: string, line: string, resets: { Reset } }
+-- `windows`: every window the provider's accounts report, its plan's and those only some of its models have.
+type Provider = { id: string, label: string, line: string, resets: { Reset }, windows: { Window } }
 type Entry = { line: string, resets: { Reset } }
 type Cache = { at: number, models: { [string]: Entry }, providers: { Provider }? }
-type Settings = { mode: string, selected: { string }, colors: { [string]: string }, order: { string } }
+type Settings = {
+	mode: string,
+	selected: { string },
+	colors: { [string]: string },
+	order: { string },
+	hidden: { [string]: { string } },
+}
 -- `moved`: the windows (by provider and label) whose share changed, and which way.
 type Pulse = { seq: number, until_ms: number, moved: { [string]: string } }
 -- A card row: its text and color and, for a window, the share at its right and its meter's share and colors;
@@ -410,14 +419,23 @@ local function reset_text(reset: Reset, now: number): string?
 	return string.format("%s · expires %s, %s · in %s", what, date, clock(t), span(reset.at - now))
 end
 
--- One usage-remaining.js window, `[Provider ]<label> <meter> <N>% left[ (<reset>)][ (+N) | (!N - <left> left)]`,
--- and the provider in front of it, if any.
-local function parse_window(piece: string): (Window?, string?)
-	local head, label, pct, rest = string.match(piece, "^(.-)(%S+) %S+ (%d+)%% left(.*)$")
-	if label == nil then
+-- One usage-remaining.js window, `[Provider ][Scope ]<span> <meter> <N>% left[ (<reset>)][ (+N) | (!N - <left> left)]`,
+-- and the provider in front of it, if any. A window metered for one tier or model of the plan carries its scope
+-- (`Fable 7d`), which stays in its label so it is told apart from the general window of the same span. The
+-- provider's one-word label leads only a line's `first` window.
+local function parse_window(piece: string, first: boolean): (Window?, string?)
+	local head, span, pct, rest = string.match(piece, "^(.-)(%S+) %S+ (%d+)%% left(.*)$")
+	if span == nil then
 		return nil, nil
 	end
-	local window: Window = { label = label :: string, pct = tonumber(pct) :: number }
+	local provider: string? = nil
+	local scope = string.match(head :: string, "^%s*(.-)%s*$") :: string
+	if first then
+		local word, after = string.match(scope, "^(%S*)%s*(.*)$")
+		provider, scope = word, after :: string
+	end
+	local label = if scope ~= "" then scope .. " " .. (span :: string) else span :: string
+	local window: Window = { label = label, pct = tonumber(pct) :: number }
 	for group in string.gmatch(rest :: string, "%((.-)%)") do
 		local plus = string.match(group, "^%+(%d+)$")
 		local n, expires = string.match(group, "^!(%d+) %- (.+) left$")
@@ -429,7 +447,6 @@ local function parse_window(piece: string): (Window?, string?)
 			window.reset = group
 		end
 	end
-	local provider = string.match(head :: string, "^(.-)%s*$")
 	return window, if provider and provider ~= "" then provider else nil
 end
 
@@ -440,7 +457,7 @@ local function parse_line(text: string): (string?, { Window }, { string })
 	local windows: { Window } = {}
 	local others: { string } = {}
 	for _, piece in usage_pieces(text) do
-		local window, provider = parse_window(piece)
+		local window, provider = parse_window(piece, #windows == 0)
 		if window then
 			table.insert(windows, window)
 			label = label or provider
@@ -485,6 +502,17 @@ local function sort_providers(list: { Provider })
 	end)
 end
 
+-- Whether `windows` has one labeled `label` (without case: `fable 7d` is `Fable 7d`).
+local function has_window(windows: { Window }, label: string): boolean
+	local key = string.lower(label)
+	for _, window in windows do
+		if string.lower(window.label) == key then
+			return true
+		end
+	end
+	return false
+end
+
 -- The cache as decoded JSON: model entries by chip name (`null` ones, two models sharing a chip name, are
 -- dropped by the decoder, which reads the same as missing) and the providers in the preset order (decoding
 -- loses the file's). `providers` is nil when the file has none, as written before it listed them.
@@ -505,7 +533,26 @@ local function parse_cache(doc: any): Cache?
 		for id, item in pairs(doc.providers) do
 			if type(id) == "string" and type(item) == "table" and type(item.line) == "string" and item.line ~= "" then
 				local label = if type(item.label) == "string" and item.label ~= "" then item.label else id
-				table.insert(list, { id = id, label = label, line = item.line, resets = resets_of(item.resets) })
+				local _, windows = parse_line(item.line)
+				table.insert(list, { id = id, label = label, line = item.line, resets = resets_of(item.resets), windows = windows })
+			end
+		end
+		-- after the plan's windows, those only some models have (Codex Spark's), from those models' lines
+		local names: { string } = {}
+		for name in cache.models do
+			table.insert(names, name)
+		end
+		table.sort(names)
+		for _, name in names do
+			local label, windows = parse_line(cache.models[name].line)
+			for _, provider in list do
+				if provider.label == label then
+					for _, window in windows do
+						if not has_window(provider.windows, window.label) then
+							table.insert(provider.windows, window)
+						end
+					end
+				end
 			end
 		end
 		sort_providers(list)
@@ -586,7 +633,7 @@ local function offered_providers(cache: Cache?): { Provider }
 	end
 	local list: { Provider } = {}
 	for label, id in LABEL_IDS do
-		table.insert(list, { id = id, label = label, line = "", resets = {} })
+		table.insert(list, { id = id, label = label, line = "", resets = {}, windows = {} })
 	end
 	sort_providers(list)
 	return list
@@ -620,7 +667,13 @@ local function id_list(value: any): { string }
 end
 
 local function load_settings(): Settings
-	local settings: Settings = { mode = "current", selected = id_list(store.get(KV_SELECTED)), colors = {}, order = id_list(store.get(KV_ORDER)) }
+	local settings: Settings = {
+		mode = "current",
+		selected = id_list(store.get(KV_SELECTED)),
+		colors = {},
+		order = id_list(store.get(KV_ORDER)),
+		hidden = {},
+	}
 	local mode = store.get(KV_MODE)
 	if mode == "all" or mode == "selected" then
 		settings.mode = mode
@@ -633,7 +686,31 @@ local function load_settings(): Settings
 			end
 		end
 	end
+	local hidden = store.get(KV_HIDDEN)
+	if type(hidden) == "table" then
+		for id, labels in pairs(hidden) do
+			local list = id_list(labels)
+			if type(id) == "string" and #list > 0 then
+				settings.hidden[id] = list
+			end
+		end
+	end
 	return settings
+end
+
+-- The windows of provider `id` the settings leave on the line, in order.
+local function shown_windows(settings: Settings, id: string?, windows: { Window }): { Window }
+	local hidden = if id then settings.hidden[id :: string] else nil
+	if hidden == nil then
+		return windows
+	end
+	local kept: { Window } = {}
+	for _, window in windows do
+		if not table.find(hidden, string.lower(window.label)) then
+			table.insert(kept, window)
+		end
+	end
+	return kept
 end
 
 -- `list` in the user's order: the providers `order` names first, as it has them, then the rest in the preset order.
@@ -789,17 +866,21 @@ end
 -- What the line shows. By the mode: every provider in the cache, or the chosen ones; or (with neither) the
 -- focused agent's: while a subagent's transcript is viewed, the line the cache holds for its model's chip name
 -- (an empty one: no usage line), else the status. The status's other parts follow either way, and saved resets
--- come from the cache entry the line came from (the status's model is the chip's).
+-- come from the cache entry the line came from (the status's model is the chip's). Windows hidden in the
+-- settings are left out; a mode with providers to show shows them even when that leaves nothing.
 local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 	local label, windows, others = parse_line(if dock.status then usage_part(dock.status) else "")
 	local groups: { Group } = {}
 	local source = "status"
 	local title: string? = nil
 	local providers = if cache then cache.providers else nil
+	local listed = false
 	if settings.mode ~= "current" and providers then
 		for _, provider in ordered(providers, settings.order) do
 			if settings.mode == "all" or table.find(settings.selected, provider.id) then
 				local provider_label, provider_windows = parse_line(provider.line)
+				listed = listed or #provider_windows > 0
+				provider_windows = shown_windows(settings, provider.id, provider_windows)
 				if #provider_windows > 0 then
 					table.insert(groups, {
 						key = provider.id,
@@ -813,7 +894,7 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 		end
 		source = settings.mode
 	end
-	if #groups == 0 then
+	if not listed then
 		local entry = if cache and dock.chip then cache.models[dock.chip :: string] else nil
 		if dock.viewing and entry then
 			label, windows = parse_line(entry.line)
@@ -821,8 +902,9 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 		else
 			source = "status"
 		end
+		local id = if label then provider_id(label, cache) else nil
+		windows = shown_windows(settings, id, windows)
 		if #windows > 0 then
-			local id = if label then provider_id(label, cache) else nil
 			table.insert(groups, {
 				key = id or label or "usage",
 				id = id,
@@ -978,7 +1060,7 @@ local function line_of(model: Model, compact: boolean?): Line
 				add(group.label, group_color(g, "a"))
 				add(NBSP .. NBSP)
 			end
-			add(string.upper(window.label), "var(--ou-lbl)")
+			add(unbroken(string.upper(window.label)), "var(--ou-lbl)")
 			add(NBSP)
 			local at = line.glyphs
 			add(string.rep(BAR, bar_glyphs))
@@ -1289,6 +1371,13 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 	})
 end
 
+-- A window's name in the card: `Weekly`, and a scoped one's with its scope, `Fable weekly`.
+local function window_name(label: string): string
+	local scope, span = string.match(label, "^(.-)%s*(%S+)$")
+	local name = WINDOW_NAMES[span :: string] or span :: string
+	return if scope ~= nil and scope ~= "" then scope .. " " .. string.lower(name) else name
+end
+
 -- The card's rows for a model (the first is the title): clock times are worked out when a model first shows, so
 -- they don't drift with every poll between the extension's 60s refreshes. With several providers each gets a
 -- row of its label in its color. A saved reset's row (its expiry date, from the cache) sits under the window
@@ -1335,7 +1424,7 @@ local function card(model: Model, hint: string): { Row }
 			local tone = tone_of(window.pct)
 			local a, b = window_colors(tone, g)
 			table.insert(rows, {
-				text = (WINDOW_NAMES[window.label] or window.label) .. " window",
+				text = window_name(window.label) .. " window",
 				right = tostring(window.pct) .. "% left",
 				color = "var(--oc-win-" .. tone .. ")",
 				share = math.clamp(window.pct, 0, 100) / 100,
@@ -1775,6 +1864,16 @@ local function colors_key(settings: Settings): string
 	return table.concat(parts, ";")
 end
 
+-- The hidden windows as one string, in a fixed order.
+local function hidden_key(settings: Settings): string
+	local parts: { string } = {}
+	for id, labels in settings.hidden do
+		table.insert(parts, id .. "=" .. table.concat(labels, ","))
+	end
+	table.sort(parts)
+	return table.concat(parts, ";")
+end
+
 -- Draws the line of an agent pane's composer. Most polls change nothing it draws, and then the sheet isn't built
 -- again: a slow call trips the window's 50 ms budget, which turns off every timer of the plugin until a reload.
 local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: Cache?)
@@ -1956,6 +2055,7 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 	table.insert(items, { label = "Choose providers…", detail = details.selected, group = "Providers", pick = "choose" })
 	table.insert(items, { label = "Reorder providers…", detail = order_summary(providers), group = "Providers", pick = "reorder" })
 	table.insert(items, { label = "Provider colors…", detail = "presets, alternatives or your own", group = "Providers", pick = "colors" })
+	table.insert(items, { label = "Provider windows…", detail = "which of each provider's windows show", group = "Providers", pick = "windows" })
 	return items
 end
 
@@ -2068,6 +2168,14 @@ local function save_color(id: string, spec: string?)
 	local colors = load_settings().colors
 	colors[id] = spec
 	store.set(KV_COLORS, colors)
+end
+
+-- Hides provider `id`'s window `label` from the line, or shows it again.
+local function toggle_window(id: string, label: string)
+	local hidden = load_settings().hidden
+	local list = toggled(hidden[id] or {}, string.lower(label))
+	hidden[id] = if #list > 0 then list else nil
+	store.set(KV_HIDDEN, hidden)
 end
 
 local function move_provider(id: string, how: string)
@@ -2185,7 +2293,80 @@ local function open_colors(cx: WindowCx)
 				return
 			end
 			local chosen = item :: any
-			open_color_choices(next_cx or cx, { id = chosen.id, label = chosen.name, line = "", resets = {} })
+			open_color_choices(next_cx or cx, { id = chosen.id, label = chosen.name, line = "", resets = {}, windows = {} })
+		end)
+end
+
+-- The windows a provider shows, by label: `5H, FABLE 7D`.
+local function windows_summary(settings: Settings, provider: Provider): string
+	local labels: { string } = {}
+	for _, window in shown_windows(settings, provider.id, provider.windows) do
+		table.insert(labels, string.upper(window.label))
+	end
+	return if #labels > 0 then table.concat(labels, ", ") else "all hidden"
+end
+
+-- A provider's windows, each checked while the line shows it.
+local function window_items(settings: Settings, provider: Provider): { PickItem }
+	local hidden = settings.hidden[provider.id] or {}
+	local items: { PickItem } = {}
+	for _, window in provider.windows do
+		table.insert(items, {
+			label = window_name(window.label) .. " window",
+			detail = string.upper(window.label) .. " · " .. tostring(window.pct) .. "% left",
+			current = table.find(hidden, string.lower(window.label)) == nil,
+			pick = "window",
+			window = string.lower(window.label),
+		})
+	end
+	return items
+end
+
+-- Toggles provider `id`'s windows one at a time; the list stays open until Esc.
+local function open_window_choices(cx: WindowCx, id: string)
+	local provider: Provider? = nil
+	for _, item in store.providers() do
+		if item.id == id then
+			provider = item
+		end
+	end
+	if provider == nil or #(provider :: Provider).windows == 0 then
+		return
+	end
+	local chosen = provider :: Provider
+	cx:pick({
+		items = window_items(load_settings(), chosen),
+		placeholder = chosen.label .. ": show which windows? Esc when done",
+		action = "toggle",
+	}):next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+		if item == nil then
+			return
+		end
+		toggle_window(id, (item :: any).window)
+		local cx2 = next_cx or cx
+		after_change(cx2)
+		open_window_choices(cx2, id)
+	end)
+end
+
+local function open_windows(cx: WindowCx)
+	local settings = load_settings()
+	local items: { PickItem } = {}
+	for _, provider in providers_in_order(settings) do
+		if #provider.windows > 0 then
+			table.insert(items, { label = provider.label, detail = windows_summary(settings, provider), id = provider.id })
+		end
+	end
+	if #items == 0 then
+		cx:toast("info", "No windows to choose from yet", "They come from omp's usage cache: focus an omp pane")
+		return
+	end
+	cx:pick({ items = items, placeholder = "Choose windows for which provider?", icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item == nil then
+				return
+			end
+			open_window_choices(next_cx or cx, (item :: any).id)
 		end)
 end
 
@@ -2194,8 +2375,8 @@ end
 -- previews changes. Its clicks arrive as `canvas_action` events. Tern keeps canvases across reloads, so a
 -- reload takes over the one it finds.
 local PANEL_TITLE = "omp Usage settings"
-local PANEL_ABOUT = "Settings for the omp Usage line above omp's composer: what it shows, the providers' order "
-	.. "and their colors. Each button changes one setting at once and runs nothing else."
+local PANEL_ABOUT = "Settings for the omp Usage line above omp's composer: what it shows, the providers' order, "
+	.. "their windows and their colors. Each button changes one setting at once and runs nothing else."
 local PANEL_SHEET = "panel"
 local PANEL_ROLE = "omp-usage.panel"
 local DOCK_ROLE = "omp-usage.panel-dock"
@@ -2214,6 +2395,24 @@ $P {
 	padding: 20px 22px 30px;
 	font: 400 12.5px/18px var(--sans);
 	color: var(--t2);
+}
+/* Tern 0.9 draws every view button (`button:where(.sf-el)`) as a 28px chip: centered on a filled, ringed
+   background, one nowrap line. The panel's buttons draw themselves, so they start from nothing; each class below
+   sets what it needs */
+$P button {
+	align-items: stretch;
+	justify-content: flex-start;
+	gap: 0;
+	height: auto;
+	padding: 0;
+	border-radius: 0;
+	font: inherit;
+	letter-spacing: normal;
+	white-space: normal;
+	color: inherit;
+	background: none;
+	box-shadow: none;
+	transform: none;
 }
 $P .oup-sec {
 	display: flex;
@@ -2385,12 +2584,34 @@ $P .oup-name {
 $P .oup-sum {
 	display: flex;
 	flex: 1 1 0;
-	gap: 14px;
+	flex-wrap: wrap;
+	gap: 2px;
 	min-width: 0;
-	overflow: hidden;
 	white-space: nowrap;
 	font: 500 10.5px/14px var(--mono);
 	font-variant-numeric: tabular-nums;
+}
+/* each window a toggle: a click hides it from the line (faded, its share struck through) or shows it again */
+$P .oup-wt {
+	display: flex;
+	flex: none;
+	align-items: center;
+	padding: 2px 6px;
+	border-radius: 5px;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		opacity 0.18s var(--ease),
+		background-color 0.18s var(--ease);
+}
+$P .oup-wt:hover {
+	background-color: var(--l1);
+}
+$P .oup-wt[data-off] {
+	opacity: 0.4;
+}
+$P .oup-wt[data-off] .oup-v {
+	text-decoration-line: line-through;
 }
 $P .oup-w {
 	margin-right: 5px;
@@ -2421,6 +2642,15 @@ $P .oup-switch {
 	background-color: var(--l3);
 	cursor: pointer;
 	transition: opacity 0.18s var(--ease);
+}
+/* the switch carries `aria-checked`, which Tern 0.9 draws as a ringed checkbox (`.sf-el[aria-checked]`, its
+   `:checked` fill and its tick `::after`): as specific as those, and later, so the plain track stays */
+$P .oup-switch[aria-checked] {
+	background-color: var(--l3);
+	box-shadow: none;
+}
+$P .oup-switch[aria-checked]::after {
+	content: none;
 }
 $P .oup-knob {
 	position: absolute;
@@ -2728,15 +2958,26 @@ local function show_section(settings: Settings, providers: { Provider }): Node
 	return section("show", "Show", nil, { ui.el("div", { class = "oup-modes" }, options) })
 end
 
--- What a provider has left, by window.
-local function left_now(provider: Provider): { Node }
-	local _, windows = parse_line(provider.line)
+-- What a provider has left, by window: each a toggle that hides it from the line or shows it again.
+local function left_now(settings: Settings, provider: Provider): { Node }
+	local hidden = settings.hidden[provider.id] or {}
 	local nodes: { Node } = {}
-	for _, window in windows do
+	for _, window in provider.windows do
 		local tone = tone_of(window.pct)
+		local key = string.lower(window.label)
+		local off = table.find(hidden, key) ~= nil
 		table.insert(
 			nodes,
-			ui.el("span", {}, {
+			ui.el("button", {
+				key = "w-" .. key,
+				class = "oup-wt",
+				actions = { click = "window=" .. provider.id .. "/" .. key },
+				attrs = {
+					["aria-pressed"] = if off then "false" else "true",
+					["aria-label"] = (if off then "Show " else "Hide ") .. provider.label .. " " .. window.label .. " on the line",
+					["data-off"] = if off then true else nil,
+				},
+			}, {
 				ui.el("span", { class = "oup-w", text = string.upper(window.label) }),
 				ui.el("span", { class = "oup-v", text = tostring(window.pct) .. "%", attrs = { ["data-low"] = if tone ~= "ok" then tone else nil } }),
 			})
@@ -2775,7 +3016,7 @@ local function provider_row(settings: Settings, provider: Provider, i: number, n
 			ui.el("span", { class = "oup-swatch" }),
 			ui.el("span", { class = "oup-name", text = provider.label }),
 		}),
-		ui.el("span", { class = "oup-sum" }, left_now(provider)),
+		ui.el("span", { class = "oup-sum" }, left_now(settings, provider)),
 		ui.el("span", { class = "oup-ctl" }, {
 			ui.el("button", {
 				class = "oup-switch",
@@ -2799,7 +3040,7 @@ local function providers_section(settings: Settings, providers: { Provider }): N
 	for i, provider in providers do
 		table.insert(rows, provider_row(settings, provider, i, #providers))
 	end
-	return section("providers", "Providers", "Top to bottom is the line's left to right. The switches pick what Selected providers shows.", {
+	return section("providers", "Providers", "Top to bottom is the line's left to right. Click a window to hide or show it; the switches pick what Selected providers shows.", {
 		ui.el("div", { class = "oup-rows", attrs = { ["data-idle"] = if settings.mode ~= "selected" then true else nil } }, rows),
 	})
 end
@@ -2891,10 +3132,15 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		table.concat(settings.selected, ","),
 		table.concat(settings.order, ","),
 		colors_key(settings),
+		hidden_key(settings),
 		keys or "",
 	}
 	for _, provider in providers do
-		table.insert(parts, provider.id .. "|" .. provider.label .. "|" .. provider.line)
+		local windows: { string } = {}
+		for _, window in provider.windows do
+			table.insert(windows, window.label .. ":" .. tostring(window.pct))
+		end
+		table.insert(parts, provider.id .. "|" .. provider.label .. "|" .. provider.line .. "|" .. table.concat(windows, ","))
 	end
 	table.insert(parts, preview.signature)
 	return { settings = settings, providers = providers, preview = preview, keys = keys, sig = table.concat(parts, "\n") }
@@ -3006,6 +3252,12 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 		store.set(KV_MODE, "selected") -- switching a provider is choosing which to show
 	elseif act == "up" or act == "down" or act == "top" or act == "bottom" then
 		move_provider(value, act)
+	elseif act == "window" then
+		local id, label = string.match(value, "^([^/]+)/(.+)$")
+		if id == nil or label == nil then
+			return false
+		end
+		toggle_window(id, label)
 	elseif act == "named" then
 		local key, name = string.match(value, "^(.*)/([^/]+)$")
 		if key == nil or name == nil or named_palette(name) == nil then
@@ -3065,6 +3317,8 @@ local function open_menu(cx: WindowCx)
 				open_reorder(cx2)
 			elseif choice.pick == "colors" then
 				open_colors(cx2)
+			elseif choice.pick == "windows" then
+				open_windows(cx2)
 			end
 		end)
 end

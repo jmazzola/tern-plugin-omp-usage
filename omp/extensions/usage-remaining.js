@@ -1,15 +1,19 @@
 // Mirror of the built-in `usage` statusline segment showing quota REMAINING
 // instead of USED: a fresh account reads 100% left, an exhausted one 0% left.
-// Saved resets appear only on 7d: (+N), or (!N - 3d 2h left) when an applicable
-// available credit expires within 5 days. Countdown is the earliest credit expiry.
+// Saved resets appear only on 7d windows: (+N), or (!N - 3d 2h left) when an
+// applicable available credit expires within 5 days. Countdown is the earliest
+// credit expiry.
 //
 // Shown for any model whose provider has an `omp usage` report with limits
 // (Anthropic, OpenAI Codex, Kimi, Gemini CLI, Muse Code, …); otherwise the
-// status is cleared. Tier/model-scoped windows (e.g. Codex Spark 5h, Claude
-// Fable 7d) are shown only when the active model belongs to that scope, so a
-// missing general window is never backfilled; a scope none of the provider's
-// models belong to names its plan and applies to every model. Windows of any
-// length are shown: 5h, 1d, 7d and mo by name, others by their length.
+// status is cleared. A limit metered for one tier of the plan's models but
+// counting toward the plan (e.g. Claude Fable 7d) is shown for every model as
+// its own window, labeled with the tier (`Fable 7d`), beside the general one.
+// A limit naming a model (e.g. Codex Spark 5h) is shown, labeled the same
+// way, only while that model is active, so a missing general window is never
+// backfilled; a tier none of the provider's models belong to names its plan
+// and is a general window. Windows of any length are shown: 5h, 1d, 7d and mo
+// by name, others by their length.
 //
 // Footer wiring: put "status" in statusLine.leftSegments/rightSegments (that
 // segment renders ctx.ui.setStatus values).
@@ -204,38 +208,55 @@ function inScope(modelId, tier, bare) {
   return !tier || bare.includes(tier);
 }
 
-// A limit scoped to a tier/model (e.g. Codex Spark 5h, Claude Fable 7d) only
-// applies when the active model belongs to that scope. A limit is plan-wide,
-// applying to every model, when it has no such scope, when omp marks it
-// shared (as omp itself treats them; Muse Code's tier is its plan name), or
-// when none of its provider's models belong to its scope, which then names
-// something other than a model. `bares`: the provider's model ids, undefined
-// when they aren't known.
-function limitApplies(limit, activeBare, bares) {
+// How a limit counts, as { kind, name, modelId, tier } (`name`: what labels
+// its window, "" for a general one). `bares`: the provider's model ids,
+// undefined when they aren't known.
+// - "plan": a general window, counting toward every model. No tier/model
+//   scope; or a tier that omp marks shared (Muse Code's tier is its plan name)
+//   or that none of the provider's models belong to, which then names
+//   something other than a model.
+// - "meter": a tier without a model id (Claude Fable 7d): a separate meter on
+//   the same plan, shown for every model as its own window, so the plan's
+//   meters all show whichever model is active.
+// - "model": names a model id (Codex Spark 5h, which omp marks shared too):
+//   it only applies while a model in its scope is active.
+function scopeOf(limit, bares) {
   const scope = limit?.scope ?? {};
   const modelId = scopeText(scope.modelId);
   const tier = scopeText(scope.tier);
-  if (scope.shared === true || (!modelId && !tier)) return true;
-  if (bares && !bares.some((b) => inScope(modelId, tier, b))) return true;
-  return inScope(modelId, tier, activeBare);
+  if (modelId) return { kind: "model", name: tier || modelId, modelId, tier };
+  if (!tier || scope.shared === true || (bares && !bares.some((b) => inScope("", tier, b)))) {
+    return { kind: "plan", name: "", modelId, tier };
+  }
+  return { kind: "meter", name: tier, modelId, tier };
 }
 
-// The test for which of a report's limits count toward model `bare` ("" for
-// the provider's plan-wide windows), given modelIndex's index.
-function appliesTo(report, bare, index) {
-  const bares = index ? (index.get(String(report.provider).toLowerCase()) ?? []) : undefined;
+// Whether a limit counts toward model `bare` ("" for the provider's windows
+// that count toward every model).
+function limitApplies(limit, activeBare, bares) {
+  const scope = scopeOf(limit, bares);
+  return scope.kind !== "model" || inScope(scope.modelId, scope.tier, activeBare);
+}
+
+// The provider's model ids from modelIndex's index; undefined when unknown.
+function providerBares(report, index) {
+  return index ? (index.get(String(report.provider).toLowerCase()) ?? []) : undefined;
+}
+
+// The test for which of a report's limits count toward model `bare`.
+function appliesTo(bare, bares) {
   return (limit) => limitApplies(limit, bare, bares);
 }
 
 // Saved resets restore a blocked short window. Credits that list the limit ids
 // they clear (Anthropic) count only toward those windows; credits without that
-// list (Codex) count toward every non-monthly window.
-function stashFor(report, limit, wc) {
+// list (Codex) count toward every non-monthly general window (`general`).
+function stashFor(report, limit, wc, general) {
   const rc = report?.resetCredits;
   if (!rc || wc === "monthly") return 0;
   const credits = Array.isArray(rc.credits) ? rc.credits : [];
   const targeted = credits.filter((c) => Array.isArray(c?.clears));
-  if (!targeted.length) return typeof rc.availableCount === "number" ? rc.availableCount : 0;
+  if (!targeted.length) return general && typeof rc.availableCount === "number" ? rc.availableCount : 0;
   let n = 0;
   for (const c of targeted) {
     if (c.status !== "available" || c.usable === false || !c.clears.includes(limit.id)) continue;
@@ -260,11 +281,12 @@ function expiringResetLeft(report, limit, wc, now) {
   return soonest === Infinity ? undefined : soonest;
 }
 
-// The saved resets counted on a model's 7d window, soonest expiry first, as
-// [{ expiresAt (epoch ms), count }]. Same credit filter as expiringResetLeft,
-// without the 5-day warning window.
-function savedResets(report, applies) {
-  const limit = (report.limits ?? []).find((l) => applies(l) && windowOf(l)?.key === "7d");
+// The saved resets counted on a model's general 7d window (else its first 7d
+// window), soonest expiry first, as [{ expiresAt (epoch ms), count }]. Same
+// credit filter as expiringResetLeft, without the 5-day warning window.
+function savedResets(report, applies, bares) {
+  const weekly = (report.limits ?? []).filter((l) => applies(l) && windowOf(l)?.key === "7d");
+  const limit = weekly.find((l) => scopeOf(l, bares).name === "") ?? weekly[0];
   if (!limit) return [];
   const credits = Array.isArray(report.resetCredits?.credits) ? report.resetCredits.credits : [];
   const now = Date.now();
@@ -279,13 +301,20 @@ function savedResets(report, applies) {
   return out.sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
-function renderRemaining(report, applies) {
+// The line for the windows `applies` passes: one per window, a limit with a
+// tier/model scope (see scopeOf) on its own, labeled with it (`Fable 7d`) and
+// keyed apart from the general window of the same length.
+function renderRemaining(report, applies, bares) {
   const now = Date.now();
   const seen = new Map();
   for (const limit of report.limits) {
     if (!applies(limit)) continue;
     const w = windowOf(limit);
-    if (!w || seen.has(w.key)) continue;
+    if (!w) continue;
+    const scope = scopeOf(limit, bares).name.replace(/\s+/g, "-");
+    const key = scope ? `${scope}:${w.key}` : w.key;
+    if (seen.has(key)) continue;
+    const label = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
     const amount = limit.amount ?? {};
     const remainingFrac =
       typeof amount.remainingFraction === "number"
@@ -297,7 +326,7 @@ function renderRemaining(report, applies) {
     const pct = w.key === "monthly" ? Math.floor(remainingFrac * 100) : Math.round(remainingFrac * 100);
     const filled = Math.round(Math.min(1, Math.max(0, remainingFrac)) * 8);
     const meter = `${"\u2588".repeat(filled)}${"\u2591".repeat(8 - filled)}`;
-    const stash = w.key === "7d" ? stashFor(report, limit, w.key) : 0;
+    const stash = w.key === "7d" ? stashFor(report, limit, w.key, !scope) : 0;
     const expiryLeft = stash > 0 ? expiringResetLeft(report, limit, w.key, now) : undefined;
     const extra = stash <= 0
       ? ""
@@ -306,26 +335,29 @@ function renderRemaining(report, applies) {
         : ` (!${stash} - ${fmtResetShort(expiryLeft)} left)`;
     const resetsAt = limit.window?.resetsAt;
     const reset = typeof resetsAt === "number" ? ` (${fmtResetShort(resetsAt - now)})` : "";
-    seen.set(w.key, { ms: w.ms, text: `${w.label} ${meter} ${pct}% left${reset}${extra}` });
+    seen.set(key, { ms: w.ms, scoped: !!scope, text: `${label} ${meter} ${pct}% left${reset}${extra}` });
   }
   if (!seen.size) return undefined;
+  // Shortest window first; at the same length the general one before scoped ones.
   const parts = [...seen.values()]
-    .sort((a, b) => (a.ms === b.ms ? 0 : a.ms < b.ms ? -1 : 1))
+    .sort((a, b) => (a.ms !== b.ms ? (a.ms < b.ms ? -1 : 1) : Number(a.scoped) - Number(b.scoped)))
     .map((p) => p.text);
   return `${shortProvider(report.provider)} ${parts.join(" · ")}`;
 }
 
 // The status for a model from fetched reports; "" when its provider isn't
-// tracked or has no report. With no model (`bare` ""), the provider's
-// plan-wide windows; a provider whose limits are all scoped to some of its
-// models shows those instead, so a provider with limits is never left out.
+// tracked or has no report. With no model (`bare` ""), the provider's windows
+// that count toward every model; a provider whose limits are all scoped to
+// some of its models shows those instead, so a provider with limits is never
+// left out.
 function lineFor(reports, provider, bare, index) {
   if (!isTrackedProvider(provider)) return "";
   const report = pickReport(reports, provider);
   if (!report) return "";
-  const line = renderRemaining(report, appliesTo(report, bare, index));
+  const bares = providerBares(report, index);
+  const line = renderRemaining(report, appliesTo(bare, bares), bares);
   if (line || bare) return line || "";
-  return renderRemaining(report, () => true) || "";
+  return renderRemaining(report, () => true, bares) || "";
 }
 
 // Draws the status for the active model from the last fetched reports. With
@@ -348,8 +380,9 @@ function render(state, ctx) {
 //   Two models sharing a chip name but not an entry can't be told apart from
 //   the chip: they get null, and the plugin keeps the main status.
 // - providers: every tracked provider with limits, keyed by provider id, in
-//   report order, as { label, line, resets } for its plan-wide windows (see
-//   lineFor; no model is given, so tier/model-scoped windows are left out).
+//   report order, as { label, line, resets } for the windows that count
+//   toward every model, tier meters included (see lineFor; no model is given,
+//   so model-scoped windows are left out).
 async function writeLines(state) {
   const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
   const models = state.models;
@@ -361,9 +394,10 @@ async function writeLines(state) {
     if (!name) continue;
     const { provider, bare } = identity(m);
     const report = isTrackedProvider(provider) ? pickReport(reports, provider) : null;
+    const bares = report ? providerBares(report, index) : undefined;
     const entry = {
       line: lineFor(reports, provider, bare, index),
-      resets: report ? savedResets(report, appliesTo(report, bare, index)) : [],
+      resets: report ? savedResets(report, appliesTo(bare, bares), bares) : [],
     };
     const same = name in entries && JSON.stringify(entries[name]) === JSON.stringify(entry);
     entries[name] = !(name in entries) || same ? entry : null;
@@ -375,10 +409,11 @@ async function writeLines(state) {
     const report = pickReport(reports, provider);
     const line = lineFor(reports, provider, "", index);
     if (!report || !line) continue;
+    const bares = providerBares(report, index);
     providers[provider] = {
       label: shortProvider(provider),
       line,
-      resets: savedResets(report, appliesTo(report, "", index)),
+      resets: savedResets(report, appliesTo("", bares), bares),
     };
   }
   const body = JSON.stringify({ entries, providers });
