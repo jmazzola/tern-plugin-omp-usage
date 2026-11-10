@@ -26,8 +26,10 @@ expires, listed under the window it resets.
   marked `+NF` on the line and labeled in the card. Credits queued behind another reset are included in the count.
 - Change what it shows, the providers' order, which of each provider's windows show, and their colors in a
   settings panel: Ctrl+Alt+U, or **usage** in the status bar.
-- Keeps itself up to date the way Tern does: when your clone's remote has a new version, an **Update omp Usage**
-  button appears in the status line, and an update card shows what's new and downloads it (see [Update](#update)).
+- Keeps itself up to date, the way Tern does: when a new version is out, an **Update omp Usage** pill appears in the
+  status line, and one click shows what's new and installs it. Nothing pops up over your work (see [Update](#update)).
+
+![The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
 
 | Part | What it does |
 | --- | --- |
@@ -171,20 +173,29 @@ the last check (or an hour, when the last one couldn't reach the remote). Like T
 interrupt you: when there's a new version, a toast says so once, and an **Update omp Usage** pill appears in the
 status line of every window (with the status bar on) until you download or skip it.
 
-![The Update omp Usage pill at the right of the status line, and the settings panel's Updates section: omp Usage 0.3.0 is available, You have 0.2.0, Download Update and What's New, then Check automatically](docs/images/update-status.png)
+Only commits that change the plugin (the `omp-usage` folder) or the omp extension (the `omp` folder) count as an
+update. A push of just the README or its pictures doesn't light up the pill; those commits come along with the next
+real update, and the card says how many there are.
+
+![The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line](docs/images/update-status.png)
 
 Click it, or run **omp Usage: Check for updates…**, or **Check for Updates** in the settings panel, and the update
 card opens over the tab: the version that's available and the one you have (from `plugin.toml` on each side, or
-commit hashes when the version didn't change), and every new commit in full underneath, with its hash, age, author
-and a link to it on the web (for a GitHub-style remote).
+commit hashes when the version didn't change), and every commit that changes the plugin in full underneath, with
+its hash, age, author and a link to it on the web (for a GitHub-style remote).
 
-![The update card: omp Usage 0.3.0 is available, You have 0.2.0, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
+![The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
 
 | Button | What it does |
 | --- | --- |
-| **Download Update** | Fast-forwards the clone to the newest commit and Tern reloads the plugin. If the update changed the omp extension, the toast says to restart omp sessions |
-| **Skip This Version** | Stays where you are; the pill and toast stay away until there's a newer version |
+| **Download Update** | Fast-forwards the clone to the remote's newest commit (README commits included) and Tern reloads the plugin. If the update changed the omp extension, the toast says to restart omp sessions |
+| **Skip This Version** | Stays where you are; the pill and toast stay away until a newer commit changes the plugin |
 | **Not Now**, Esc, or a click outside | Closes the card; the pill stays |
+
+While the update lands, any open settings panel, in any window, steps aside for a moment rather than flash half
+drawn as Tern reloads the plugin, and a toast confirms the new version:
+
+![Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0](docs/images/update-landing.png)
 
 Checking by hand (**Check for Updates** in the settings panel, or **omp Usage: Check for updates…**) shows the card
 even for a version you skipped, or says omp Usage is up to date. To check more or less often, or never, pick under
@@ -221,7 +232,8 @@ Then restart omp sessions if the extension changed.
 | All or Selected providers shows only the current model | The cache is missing or older than 10 minutes: restart omp sessions started before the extension was updated |
 | Ctrl+Alt+U doesn't open the panel | Another binding or your keyboard layout (where Ctrl+Alt types characters) took it. The hover card's last row shows the chord in effect; bind `plugin.omp-usage.panel` to another in Tern's keybinds |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads. Ask omp to fix `omp-usage` |
-| No update prompt, or `omp Usage can't check for updates` | The repo folder must be a git clone whose branch tracks a remote, with git on `PATH`. **omp Usage: Check for updates…** shows git's reason |
+| No Update omp Usage pill when an update is out | The pill lives in Tern's status line: turn the status bar on, or use the settings panel's Updates section, which says the same. Automatic checks might be **Off** (Updates › Check automatically) |
+| `omp Usage can't check for updates` | The repo folder must be a git clone whose branch tracks a remote, with git on `PATH`. **omp Usage: Check for updates…** shows git's reason |
 | Edits to `window.luau` don't show | Run `tern plugin reload` |
 
 Don't edit Tern's `settings.json` from PowerShell. It saves the file with a BOM, and Tern falls back to its
