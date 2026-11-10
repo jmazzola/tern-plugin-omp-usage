@@ -42,6 +42,9 @@
 -- and settles into its tip: in the provider's color when quota went down, `--ok` when it came back. Nothing
 -- moves at rest, and Reduce Motion (either Tern's or the system's) drops every fade, rise and sweep.
 
+-- Update checks for this clone, and the prompt that offers them (update.luau).
+local update = require("./update")
+
 -- Re-reads the composer dock (~40 nodes) every second, and the cache's text (a few KB, decoded only when it
 -- changed) as `poll_cache` last fetched it. The usage-remaining extension redraws within a second of a model
 -- switch, so this follows it within about two.
@@ -2048,6 +2051,14 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 	table.insert(items, { label = "Reorder providers…", detail = order_summary(providers), group = "Providers", pick = "reorder" })
 	table.insert(items, { label = "Provider colors…", detail = "presets, alternatives or your own", group = "Providers", pick = "colors" })
 	table.insert(items, { label = "Provider windows…", detail = "which of each provider's windows show", group = "Providers", pick = "windows" })
+	table.insert(items, { label = "Check for updates…", detail = "fetch this clone's branch and offer what's new", group = "Updates", icon = "download", pick = "update" })
+	table.insert(items, {
+		label = "Check for updates automatically",
+		detail = "every 6 hours; pick to turn " .. (if update.auto() then "off" else "on"),
+		group = "Updates",
+		current = update.auto(),
+		pick = "update-auto",
+	})
 	return items
 end
 
@@ -3311,6 +3322,10 @@ local function open_menu(cx: WindowCx)
 				open_colors(cx2)
 			elseif choice.pick == "windows" then
 				open_windows(cx2)
+			elseif choice.pick == "update" then
+				update.check(cx2, true)
+			elseif choice.pick == "update-auto" then
+				update.set_auto(cx2, not update.auto())
 			end
 		end)
 end
@@ -3328,6 +3343,15 @@ tern.command({
 	title = "omp Usage: Settings…",
 	icon = "gauge",
 	run = open_menu,
+})
+
+tern.command({
+	id = "update",
+	title = "omp Usage: Check for updates…",
+	icon = "download",
+	run = function(cx: WindowCx)
+		update.check(cx, true)
+	end,
 })
 
 -- `usage` in the status bar, on an agent pane: a click opens the panel.

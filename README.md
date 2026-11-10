@@ -127,7 +127,8 @@ menus, so the order is set with buttons.
 **omp Usage: Settings…** in the palette offers the same settings as menus, for the keyboard: Open settings
 panel…, Show, Choose providers… (the list stays open so you can check several; Esc closes it), Reorder
 providers… (pick a provider, then Move up, Move down, Move to top or Move to bottom), Provider colors… and
-Provider windows… (pick a provider, then check the windows to show; Esc closes it).
+Provider windows… (pick a provider, then check the windows to show; Esc closes it). Its Updates section has
+Check for updates… and Check for updates automatically (see [Update](#update)).
 
 The presets: Claude clay, Codex graphite to blue, OpenAI green, Kimi green, Gemini blue to white, Antigravity
 blue, MiniMax red to pink, Go cyan, Qwen purple, Devin teal. Other providers use the theme's accent. Whatever
@@ -161,7 +162,25 @@ sessions started before the extension wrote the cache need a restart.
 
 ## Update
 
-From the repo folder:
+The plugin checks for updates itself, at most every 6 hours: about 20 seconds after Tern loads it, and hourly
+after that, it fetches your clone's branch from its remote once 6 hours have passed since the last check. When
+there are new commits, a picker asks what to do and lists them under **What's new**, newest first, with their
+short hash and age:
+
+| Choice | What it does |
+| --- | --- |
+| **Update now** | Fast-forwards the clone to the newest commit shown and reloads Tern's plugins. If the update changed the omp extension, the toast says to restart omp sessions |
+| **Keep this version** | Stays where you are. The automatic check won't ask again until there's a commit newer than the one it offered |
+| A commit | Opens it on the web (for a GitHub-style remote) |
+| Esc | Decides nothing; the next check asks again |
+
+Check by hand at any time with **omp Usage: Check for updates…** in the palette (it also offers a version you
+kept). To stop the automatic checks, pick **Check for updates automatically** in **omp Usage: Settings…**; pick
+it again to turn them back on. Every Tern window shares these choices, and one window checks per interval.
+
+The update is a fast-forward of the branch you have checked out, so it needs that branch to track a remote (as
+`main` does after `git clone`) and git on `PATH`. It doesn't touch local commits or uncommitted edits: if they
+block the fast-forward, the toast shows git's reason, and you can update by hand from the repo folder:
 
 ```sh
 git pull
@@ -187,6 +206,7 @@ Then restart omp sessions if the extension changed.
 | All or Selected providers shows only the current model | The cache is missing or older than 10 minutes: restart omp sessions started before the extension was updated |
 | Ctrl+Alt+U doesn't open the panel | Another binding or your keyboard layout (where Ctrl+Alt types characters) took it. The hover card's last row shows the chord in effect; bind `plugin.omp-usage.panel` to another in Tern's keybinds |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads. Ask omp to fix `omp-usage` |
+| No update prompt, or `omp Usage can't check for updates` | The repo folder must be a git clone whose branch tracks a remote, with git on `PATH`. **omp Usage: Check for updates…** shows git's reason |
 | Edits to `window.luau` don't show | Run `tern plugin reload` |
 
 Don't edit Tern's `settings.json` from PowerShell. It saves the file with a BOM, and Tern falls back to its
