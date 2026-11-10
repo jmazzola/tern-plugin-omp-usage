@@ -175,7 +175,7 @@ local KV_ORDER = "omp-usage.order"
 local KV_HIDDEN = "omp-usage.hidden"
 
 type Window = { label: string, pct: number, reset: string?, saved: number?, expires: string? }
-type Reset = { at: number, count: number }
+type Reset = { at: number, count: number, window: string? }
 -- A provider on the line: its key (provider id when known, else its label), label, windows and saved resets
 -- (nil when the cache has none for it).
 type Group = { key: string, id: string?, label: string, windows: { Window }, resets: { Reset }? }
@@ -402,7 +402,7 @@ end
 
 -- A saved reset's card row: `saved reset · expires Thu Oct 22, 12:00 PM · in 10d 18h` (`2 saved resets · …` for
 -- a credit of two); nil once it has expired.
-local function reset_text(reset: Reset, now: number): string?
+local function reset_text(reset: Reset, now: number, fable: boolean): string?
 	if reset.at <= now then
 		return nil
 	end
@@ -415,7 +415,8 @@ local function reset_text(reset: Reset, now: number): string?
 	if (t :: any).year ~= (today :: any).year then
 		date ..= " " .. tostring((t :: any).year)
 	end
-	local what = if reset.count > 1 then string.format("%d saved resets", reset.count) else "saved reset"
+	local kind = if fable then "Fable reset" else "saved reset"
+	local what = if reset.count > 1 then string.format("%d %ss", reset.count, kind) else kind
 	return string.format("%s · expires %s, %s · in %s", what, date, clock(t), span(reset.at - now))
 end
 
@@ -478,7 +479,7 @@ local function resets_of(value: any): { Reset }
 		for _, item in ipairs(value) do
 			if type(item) == "table" and type(item.expiresAt) == "number" then
 				local count = if type(item.count) == "number" and item.count >= 1 then item.count else 1
-				table.insert(resets, { at = item.expiresAt, count = count })
+				table.insert(resets, { at = item.expiresAt, count = count, window = if type(item.window) == "string" then string.lower(item.window) else nil })
 			end
 		end
 	end
@@ -854,7 +855,7 @@ local function signature_of(groups: { Group }, others: { string }, title: string
 			)
 		end
 		for _, reset in group.resets or {} do
-			table.insert(parts, string.format("r%d*%d", reset.at, reset.count))
+			table.insert(parts, string.format("r%d*%d:%s", reset.at, reset.count, reset.window or ""))
 		end
 	end
 	for _, other in others do
@@ -1073,7 +1074,8 @@ local function line_of(model: Model, compact: boolean?): Line
 				end
 			end
 			if window.saved then
-				local saved = "+" .. tostring(window.saved)
+				local fable = group.id == "anthropic" and string.lower(window.label) == "fable 7d"
+				local saved = "+" .. tostring(window.saved) .. (if fable then "F" else "")
 				if window.expires then
 					saved ..= if several then "!" else NBSP .. "exp" .. NBSP .. unbroken(window.expires :: string)
 				end
@@ -1396,29 +1398,22 @@ local function card(model: Model, hint: string): { Row }
 			table.insert(rows, { text = group.label, color = accent })
 		end
 		local resets = group.resets or {}
-		local carrier: number? = nil
-		for w, window in group.windows do
-			if window.saved then
-				carrier = w
-			end
-		end
-		if carrier == nil and #resets > 0 then
-			for w, window in group.windows do
-				if window.label == "7d" then
-					carrier = w
-				end
-			end
-		end
-		local function add_resets()
+		local function add_resets(label: string): boolean
+			local fable = group.id == "anthropic" and label == "fable 7d"
+			local added = false
 			for _, reset in resets do
-				local text = reset_text(reset, now)
-				if text then
-					table.insert(rows, {
-						text = CARD_INDENT .. text,
-						color = if reset.at - now <= RESET_WARN_MS then "var(--oc-warn)" else accent,
-					})
+				if reset.window == label or (reset.window == nil and label == "7d") then
+					local text = reset_text(reset, now, fable)
+					if text then
+						added = true
+						table.insert(rows, {
+							text = CARD_INDENT .. text,
+							color = if reset.at - now <= RESET_WARN_MS then "var(--oc-warn)" else accent,
+						})
+					end
 				end
 			end
+			return added
 		end
 		for w, window in group.windows do
 			local tone = tone_of(window.pct)
@@ -1431,6 +1426,19 @@ local function card(model: Model, hint: string): { Row }
 				a = a,
 				b = b,
 			})
+			local has_dates = add_resets(string.lower(window.label))
+			if not has_dates and window.saved then
+				local saved = window.saved :: number
+				local kind = if group.id == "anthropic" and string.lower(window.label) == "fable 7d" then "Fable reset" else "saved reset"
+				local row = string.format("%d %s%s", saved, kind, if saved == 1 then "" else "s")
+				if window.expires then
+					row ..= " · expires in " .. (window.expires :: string)
+				end
+				table.insert(rows, {
+					text = CARD_INDENT .. row,
+					color = if window.expires then "var(--oc-warn)" else accent,
+				})
+			end
 			local reset = window.reset
 			if reset == "soon" then
 				table.insert(rows, { text = CARD_INDENT .. "resets soon", color = "var(--oc-mute)" })
@@ -1443,22 +1451,6 @@ local function card(model: Model, hint: string): { Row }
 				end
 				table.insert(rows, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
 			end
-			if w == carrier and #resets > 0 then
-				add_resets()
-			elseif window.saved then
-				local saved = window.saved :: number
-				local row = string.format("%d saved reset%s", saved, if saved == 1 then "" else "s")
-				if window.expires then
-					row ..= " · expires in " .. (window.expires :: string)
-				end
-				table.insert(rows, {
-					text = CARD_INDENT .. row,
-					color = if window.expires then "var(--oc-warn)" else accent,
-				})
-			end
-		end
-		if carrier == nil then
-			add_resets()
 		end
 	end
 	for _, other in model.others do

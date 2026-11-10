@@ -22,6 +22,8 @@ expires.
   provider's color when quota drops, green when it comes back.
 - Hover the line to lift it into a glass capsule; after a beat a card opens above it with each window, its
   meter, reset countdown and clock time, the expiry date of each saved reset, and the settings shortcut.
+  Saved resets appear directly beneath their applicable usage window in the card; Claude's Fable reset count is
+  marked `+NF` on the line and labeled in the card. Credits queued behind another reset are included in the count.
 - Change what it shows, the providers' order, which of each provider's windows show, and their colors in a
   settings panel: Ctrl+Alt+U, or **usage** in the status bar.
 

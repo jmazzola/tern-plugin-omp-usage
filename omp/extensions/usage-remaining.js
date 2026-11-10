@@ -225,6 +225,7 @@ function scopeOf(limit, bares) {
   const modelId = scopeText(scope.modelId);
   const tier = scopeText(scope.tier);
   if (modelId) return { kind: "model", name: tier || modelId, modelId, tier };
+  if (limit?.id === "anthropic:7d:fable") return { kind: "meter", name: "fable", modelId, tier };
   if (!tier || scope.shared === true || (bares && !bares.some((b) => inScope("", tier, b)))) {
     return { kind: "plan", name: "", modelId, tier };
   }
@@ -248,31 +249,36 @@ function appliesTo(bare, bares) {
   return (limit) => limitApplies(limit, bare, bares);
 }
 
-// Saved resets restore a blocked short window. Credits that list the limit ids
-// they clear (Anthropic) count only toward those windows; credits without that
-// list (Codex) count toward every non-monthly general window (`general`).
+// Anthropic's Fable reset credits name the API meter, not omp's limit id.
+// A later Fable credit can be unavailable until the preceding one is used;
+// remainingCount and the report's availableCount still include it.
+function creditApplies(c, report, limit, general) {
+  const fable = report.provider === "anthropic"
+    && c?.clears?.includes("anthropic:reset:seven_day_overage_included")
+    && limit.id === "anthropic:7d:fable";
+  if (fable) return c.remainingCount > 0 && (c.status === "available" || c.status === "unavailable");
+  if (c?.status !== "available" || c.usable === false || c.remainingCount <= 0) return false;
+  return Array.isArray(c.clears) ? c.clears.includes(limit.id) : general;
+}
+
 function stashFor(report, limit, wc, general) {
   const rc = report?.resetCredits;
   if (!rc || wc === "monthly") return 0;
   const credits = Array.isArray(rc.credits) ? rc.credits : [];
-  const targeted = credits.filter((c) => Array.isArray(c?.clears));
-  if (!targeted.length) return general && typeof rc.availableCount === "number" ? rc.availableCount : 0;
-  let n = 0;
-  for (const c of targeted) {
-    if (c.status !== "available" || c.usable === false || !c.clears.includes(limit.id)) continue;
-    n += typeof c.remainingCount === "number" ? c.remainingCount : 1;
+  if (!credits.some((c) => Array.isArray(c?.clears))) {
+    return general && typeof rc.availableCount === "number" ? rc.availableCount : 0;
   }
-  return n;
+  return credits.reduce((n, c) => n + (creditApplies(c, report, limit, general)
+    ? (typeof c.remainingCount === "number" ? c.remainingCount : 1) : 0), 0);
 }
 
 // Find the earliest applicable saved-reset expiry within the warning window.
-function expiringResetLeft(report, limit, wc, now) {
+function expiringResetLeft(report, limit, wc, now, general) {
   if (wc === "monthly") return undefined;
   const credits = Array.isArray(report?.resetCredits?.credits) ? report.resetCredits.credits : [];
   let soonest = Infinity;
   for (const c of credits) {
-    if (c?.status !== "available" || c.usable === false || c.remainingCount <= 0) continue;
-    if (Array.isArray(c.clears) && !c.clears.includes(limit.id)) continue;
+    if (!creditApplies(c, report, limit, general)) continue;
     const expiresAt = Date.parse(c.expiresAt);
     if (!Number.isFinite(expiresAt)) continue;
     const left = expiresAt - now;
@@ -281,22 +287,22 @@ function expiringResetLeft(report, limit, wc, now) {
   return soonest === Infinity ? undefined : soonest;
 }
 
-// The saved resets counted on a model's general 7d window (else its first 7d
-// window), soonest expiry first, as [{ expiresAt (epoch ms), count }]. Same
-// credit filter as expiringResetLeft, without the 5-day warning window.
+// Expiries are associated with the same weekly window that displays the count.
 function savedResets(report, applies, bares) {
-  const weekly = (report.limits ?? []).filter((l) => applies(l) && windowOf(l)?.key === "7d");
-  const limit = weekly.find((l) => scopeOf(l, bares).name === "") ?? weekly[0];
-  if (!limit) return [];
   const credits = Array.isArray(report.resetCredits?.credits) ? report.resetCredits.credits : [];
   const now = Date.now();
   const out = [];
-  for (const c of credits) {
-    if (c?.status !== "available" || c.usable === false || c.remainingCount <= 0) continue;
-    if (Array.isArray(c.clears) && !c.clears.includes(limit.id)) continue;
-    const expiresAt = Date.parse(c.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
-    out.push({ expiresAt, count: typeof c.remainingCount === "number" ? c.remainingCount : 1 });
+  for (const limit of report.limits ?? []) {
+    const w = windowOf(limit);
+    if (!applies(limit) || w?.key !== "7d") continue;
+    const scope = scopeOf(limit, bares).name.replace(/\s+/g, "-");
+    const label = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
+    for (const c of credits) {
+      if (!creditApplies(c, report, limit, !scope)) continue;
+      const expiresAt = Date.parse(c.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+      out.push({ expiresAt, count: typeof c.remainingCount === "number" ? c.remainingCount : 1, window: label });
+    }
   }
   return out.sort((a, b) => a.expiresAt - b.expiresAt);
 }
@@ -327,7 +333,7 @@ function renderRemaining(report, applies, bares) {
     const filled = Math.round(Math.min(1, Math.max(0, remainingFrac)) * 8);
     const meter = `${"\u2588".repeat(filled)}${"\u2591".repeat(8 - filled)}`;
     const stash = w.key === "7d" ? stashFor(report, limit, w.key, !scope) : 0;
-    const expiryLeft = stash > 0 ? expiringResetLeft(report, limit, w.key, now) : undefined;
+    const expiryLeft = stash > 0 ? expiringResetLeft(report, limit, w.key, now, !scope) : undefined;
     const extra = stash <= 0
       ? ""
       : expiryLeft === undefined
