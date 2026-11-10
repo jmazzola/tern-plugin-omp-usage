@@ -120,6 +120,7 @@ that's open.
 | Show | **Current model**: the focused agent's provider (the default); while you view a subagent's transcript, its model's. **All providers**: every provider with limits, one after another; with several, the line drops the countdowns and the word `left` (the card has them). **Selected providers**: the ones switched on under Providers |
 | Providers | A row per provider, in the line's order. Its windows are the ones your accounts report (e.g. Claude's `7D` and `FABLE 7D`): click one to hide it from the line and the card, everywhere and in every mode, and again to show it (a hidden one fades, its share struck through). A provider with every window hidden drops off the line. Its switch puts it in or takes it out of Selected providers, and shows those; its arrows move it one place, **top** moves it first |
 | Colors | Per provider: its preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), **Custom…** (one or two hex colors, like `#d97757` or `#9aa7b4, #5b8def`) and **Reset**. Point at a swatch for its name |
+| Updates | **Check for updates** checks now, and **Check automatically** picks how often the plugin checks on its own: Hourly, Every 6 hours (the default), Daily, Weekly or Off (see [Update](#update)) |
 
 ![The settings panel: a line preview, the Show choices, providers with their window toggles (Claude's 5H hidden and struck through), switches and move buttons, and color swatches](docs/images/settings-panel.png)
 
@@ -130,7 +131,7 @@ menus, so the order is set with buttons.
 panel…, Show, Choose providers… (the list stays open so you can check several; Esc closes it), Reorder
 providers… (pick a provider, then Move up, Move down, Move to top or Move to bottom), Provider colors… and
 Provider windows… (pick a provider, then check the windows to show; Esc closes it). Its Updates section has
-Check for updates… and Check for updates automatically (see [Update](#update)).
+Check for updates… and Check automatically… (how often, as in the panel; see [Update](#update)).
 
 The presets: Claude clay, Codex graphite to blue, OpenAI green, Kimi green, Gemini blue to white, Antigravity
 blue, MiniMax red to pink, Go cyan, Qwen purple, Devin teal. Other providers use the theme's accent. Whatever
@@ -164,10 +165,11 @@ sessions started before the extension wrote the cache need a restart.
 
 ## Update
 
-The plugin checks for updates itself, at most every 6 hours: about 20 seconds after Tern loads it, and hourly
-after that, it fetches your clone's branch from its remote once 6 hours have passed since the last check (or an
-hour, when the last one couldn't reach the remote). When there are new commits, a picker asks what to do and
-lists them under **What's new**, newest first, one line each (the newest 15, then a row for any earlier ones):
+The plugin checks for updates itself, every 6 hours unless you choose otherwise: about 20 seconds after Tern
+loads it, and hourly after that, it fetches your clone's branch from its remote once the interval has passed since
+the last check (or an hour, when the last one couldn't reach the remote). When there are new commits, a picker asks
+what to do and lists them under **What's new**, newest first, one line each (the newest 15, then a row for any
+earlier ones):
 
 ![The update prompt: Decide later, Update now (7 new commits, 712e85f to ea662f9) and Keep this version, then Read all changes… and the new commits under What's new](docs/images/update-prompt.png)
 
@@ -186,9 +188,10 @@ a plugin reload checks again when you click one, rather than act on what it show
 
 ![The what's-new pane: each commit's full subject, hash, age, author and web link, a commit message with a bulleted list, and Update now, Keep this version and Close in the bottom bar](docs/images/whats-new-pane.png)
 
-Check by hand at any time with **omp Usage: Check for updates…** in the palette (it also offers a version you
-kept). To stop the automatic checks, pick **Check for updates automatically** in **omp Usage: Settings…**; pick
-it again to turn them back on. Every Tern window shares these choices, and one window checks per interval.
+Check by hand at any time with **Check for updates** in the settings panel or **omp Usage: Check for updates…** in
+the palette (either also offers a version you kept). To check more or less often, or never, pick under **Check
+automatically** in the panel's Updates section, or **Check automatically…** in **omp Usage: Settings…**: Hourly,
+Every 6 hours, Daily, Weekly or Off. Every Tern window shares these choices, and one window checks per interval.
 
 The update is a fast-forward of the branch you have checked out, so it needs that branch to track a remote (as
 `main` does after `git clone`) and git on `PATH`. It never merges or rebases your work: when the clone has local

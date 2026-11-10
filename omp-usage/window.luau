@@ -2052,12 +2052,12 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 	table.insert(items, { label = "Provider colors…", detail = "presets, alternatives or your own", group = "Providers", pick = "colors" })
 	table.insert(items, { label = "Provider windows…", detail = "which of each provider's windows show", group = "Providers", pick = "windows" })
 	table.insert(items, { label = "Check for updates…", detail = "fetch this clone's branch and offer what's new", group = "Updates", icon = "download", pick = "update" })
+	local every = update.interval()
 	table.insert(items, {
-		label = "Check for updates automatically",
-		detail = "every 6 hours; pick to turn " .. (if update.auto() then "off" else "on"),
+		label = "Check automatically…",
+		detail = every.label,
 		group = "Updates",
-		current = update.auto(),
-		pick = "update-auto",
+		pick = "update-every",
 	})
 	return items
 end
@@ -2801,6 +2801,43 @@ $P .oup-btn:hover {
 	color: var(--t1);
 	box-shadow: 0 0 0 1px var(--l4);
 }
+$P .oup-urow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 14px;
+}
+$P .oup-ulabel {
+	font: 400 11.5px/14px var(--sans);
+	color: var(--t3);
+}
+$P .oup-pills {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+$P .oup-pill {
+	height: 24px;
+	padding: 0 10px;
+	border-radius: 12px;
+	font: 500 11.5px/24px var(--sans);
+	color: var(--t2);
+	box-shadow: 0 0 0 1px var(--l2);
+	cursor: pointer;
+	transition:
+		color 0.14s var(--ease),
+		box-shadow 0.14s var(--ease),
+		background-color 0.14s var(--ease);
+}
+$P .oup-pill:hover {
+	color: var(--t1);
+	box-shadow: 0 0 0 1px var(--l4);
+}
+$P .oup-pill[data-on] {
+	color: var(--t1);
+	background-color: rgb(from var(--accent) r g b / 16%);
+	box-shadow: 0 0 0 1px rgb(from var(--accent) r g b / 55%);
+}
 $P .oup-cname {
 	overflow: hidden;
 	white-space: nowrap;
@@ -3103,6 +3140,28 @@ local function colors_section(settings: Settings, providers: { Provider }, rules
 	return section("colors", "Colors", "A label's color and its bars'. Point at a swatch for its name.", rows)
 end
 
+-- Updates (update.luau): check now, and how often the automatic check runs.
+local function updates_section(): Node
+	local current = update.interval()
+	local pills: { Node } = {}
+	for _, interval in update.INTERVALS do
+		local on = interval.id == current.id
+		table.insert(pills, ui.el("button", {
+			class = "oup-pill",
+			text = interval.label,
+			actions = { click = "update-every=" .. interval.id },
+			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+		}))
+	end
+	return section("updates", "Updates", "New commits on this clone's remote: you see them, then choose whether to take them.", {
+		ui.el("div", { class = "oup-urow" }, {
+			ui.el("button", { class = "oup-btn", text = "Check for updates", actions = { click = "update-check" } }),
+			ui.el("span", { class = "oup-ulabel", text = "Check automatically" }),
+			ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "How often omp Usage checks for updates" } }, pills),
+		}),
+	})
+end
+
 local function panel_dock(keys: string?): Node
 	local children: { Node } = {
 		ui.node("icon", { name = "check" }),
@@ -3137,6 +3196,7 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		colors_key(settings),
 		hidden_key(settings),
 		keys or "",
+		update.interval().id,
 	}
 	for _, provider in providers do
 		local windows: { string } = {}
@@ -3161,6 +3221,7 @@ local function panel_parts(state: PanelState): (Node, Node, string)
 		show_section(state.settings, state.providers),
 		providers_section(state.settings, state.providers),
 		colors_section(state.settings, state.providers, rules),
+		updates_section(),
 	})
 	return view, panel_dock(state.keys), table.concat(rules, "\n")
 end
@@ -3272,6 +3333,11 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 	elseif act == "custom" then
 		prompt_color(cx, value, label_of(store.providers(), value))
 		return true
+	elseif act == "update-check" then
+		update.check(cx, true)
+		return true
+	elseif act == "update-every" then
+		update.set_interval(cx, value)
 	else
 		return false
 	end
@@ -3295,6 +3361,22 @@ tern.timer(600, function(cx: WindowCx?)
 		end
 	end
 end)
+
+-- How often the automatic update check runs, as a picker.
+local function open_intervals(cx: WindowCx)
+	local current = update.interval()
+	local items: { PickItem } = {}
+	for _, interval in update.INTERVALS do
+		table.insert(items, { label = interval.label, current = interval.id == current.id, every = interval.id })
+	end
+	cx:pick({ items = items, placeholder = "Check for omp Usage updates how often?", icon = "download" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item then
+				update.set_interval(next_cx or cx, (item :: any).every)
+				after_change(next_cx or cx)
+			end
+		end)
+end
 
 local function open_menu(cx: WindowCx)
 	local settings = load_settings()
@@ -3324,8 +3406,8 @@ local function open_menu(cx: WindowCx)
 				open_windows(cx2)
 			elseif choice.pick == "update" then
 				update.check(cx2, true)
-			elseif choice.pick == "update-auto" then
-				update.set_auto(cx2, not update.auto())
+			elseif choice.pick == "update-every" then
+				open_intervals(cx2)
 			end
 		end)
 end

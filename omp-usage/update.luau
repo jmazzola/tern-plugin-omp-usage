@@ -1,7 +1,8 @@
 --!strict
 -- Updates for this plugin's git clone (the README installs it as a clone that `tern plugin link` loads in place).
 --
--- Every few hours, and from `omp Usage: Check for updates…`, it fetches the checked-out branch's upstream. When
+-- At the interval the user picks (every 6 hours unless changed, or never), and from `omp Usage: Check for updates…`
+-- or the settings panel's Check for updates, it fetches the checked-out branch's upstream. When
 -- the branch is behind, a picker lists the new commits under the choices: update (a fast-forward to the commit
 -- the picker showed, after which Tern reloads the plugin) or keep this version (no automatic prompt again until
 -- the upstream moves past that commit). Esc decides nothing: the next check asks again. Picking a commit, or
@@ -12,22 +13,35 @@
 -- that tick together claim the check, and the claim that lands last wins) and a version kept in one window is
 -- kept in all of them.
 
+-- How often the automatic check runs: `hours` nil is never.
+export type Interval = { id: string, label: string, hours: number? }
+
 type Module = {
-	auto: () -> boolean,
+	INTERVALS: { Interval },
+	interval: () -> Interval,
+	set_interval: (cx: WindowCx, id: string) -> (),
 	check: (cx: WindowCx, manual: boolean) -> (),
-	set_auto: (cx: WindowCx, on: boolean) -> (),
 }
 local M = {} :: Module
 
-local KV_AUTO = "omp-usage.update-auto" -- false: no automatic checks (absent: on)
+M.INTERVALS = {
+	{ id = "1h", label = "Hourly", hours = 1 },
+	{ id = "6h", label = "Every 6 hours", hours = 6 },
+	{ id = "1d", label = "Daily", hours = 24 },
+	{ id = "1w", label = "Weekly", hours = 24 * 7 },
+	{ id = "off", label = "Off", hours = nil },
+}
+local DEFAULT_INTERVAL = "6h"
+
+local KV_EVERY = "omp-usage.update-every" -- an INTERVALS id
+local KV_AUTO = "omp-usage.update-auto" -- 0.2.0's on/off switch: false is read as `off` until an interval is set
 local KV_CHECKED = "omp-usage.update-checked" -- os.time() of the last automatic check
 local KV_KEPT = "omp-usage.update-kept" -- the upstream commit the user kept their version over
 local KV_CLAIM = "omp-usage.update-claim" -- the window that claimed it
 
 local FIRST_CHECK_MS = 20 * 1000 -- after a load, past Tern's own startup work
 local CLAIM_SETTLE_MS = 2000 -- long enough for every window ticking with this one to write its claim
-local TICK_MS = 60 * 60 * 1000
-local CHECK_EVERY_S = 6 * 60 * 60
+local TICK_MS = 60 * 60 * 1000 -- how often each window looks whether a check is due: the shortest interval
 local SHOWN_COMMITS = 15 -- rows in the picker
 local PANE_COMMITS = 100 -- commits the what's-new pane shows in full
 local BODY_MAX = 4000 -- characters of one commit's message body the pane shows
@@ -110,8 +124,21 @@ local function plural(n: number, word: string): string
 	return tostring(n) .. " " .. word .. (if n == 1 then "" else "s")
 end
 
-function M.auto(): boolean
-	return kv_get(KV_AUTO) ~= false
+function M.interval(): Interval
+	local id = kv_get(KV_EVERY)
+	if id == nil and kv_get(KV_AUTO) == false then
+		id = "off"
+	end
+	local fallback = M.INTERVALS[1]
+	for _, interval in M.INTERVALS do
+		if interval.id == id then
+			return interval
+		end
+		if interval.id == DEFAULT_INTERVAL then
+			fallback = interval
+		end
+	end
+	return fallback
 end
 
 local busy = false -- a check, or the prompt it opened, is under way in this window
@@ -395,11 +422,11 @@ function M.check(cx: WindowCx, manual: boolean)
 		-- with no repository named, git fetches the current branch's remote
 		git(cx1, { "fetch", "--quiet" }, 60000, function(fetch: Git, cx2: WindowCx)
 			if not fetch.ok then
-				if not manual then
+				local hours = M.interval().hours
+				if not manual and hours then
 					-- often just offline (Tern started before the network): the next hourly tick, in any window,
-					-- tries again instead of waiting out the whole interval (a minute's slack for a timer that
-					-- fires early)
-					kv_set(KV_CHECKED, os.time() - CHECK_EVERY_S + TICK_MS // 1000 - 60)
+					-- tries again instead of waiting out the whole interval
+					kv_set(KV_CHECKED, os.time() - hours * 3600 + TICK_MS // 1000)
 				end
 				stop(cx2, "omp Usage couldn't fetch updates", reason(fetch.err))
 				return
@@ -478,27 +505,39 @@ function M.check(cx: WindowCx, manual: boolean)
 	end)
 end
 
--- Turns automatic checks on or off.
-function M.set_auto(cx: WindowCx, on: boolean)
-	kv_set(KV_AUTO, if on then nil else false)
-	if on then
-		cx:toast("info", "omp Usage checks for updates every 6 hours")
+-- Sets how often the automatic check runs.
+function M.set_interval(cx: WindowCx, id: string)
+	local chosen: Interval? = nil
+	for _, interval in M.INTERVALS do
+		if interval.id == id then
+			chosen = interval
+		end
+	end
+	if chosen == nil then
+		return
+	end
+	kv_set(KV_EVERY, id)
+	kv_set(KV_AUTO, nil)
+	if chosen.hours then
+		cx:toast("info", "omp Usage checks for updates " .. string.lower(chosen.label))
 	else
 		cx:toast("info", "omp Usage won't check for updates on its own", "Check any time: omp Usage: Check for updates…")
 	end
 end
 
--- An automatic check when the last one, in any window, is CHECK_EVERY_S old; looked at hourly. Windows started
--- together tick together: each writes its claim, and only the window whose claim stuck checks.
+-- An automatic check when the last one, in any window, is as old as the interval (less a minute's slack for a
+-- timer that fires early); looked at hourly. Windows started together tick together: each writes its claim, and
+-- only the window whose claim stuck checks.
 local function tick(cx: WindowCx?)
 	tern.timer(TICK_MS, tick)
-	if cx == nil or not M.auto() then
+	local hours = M.interval().hours
+	if cx == nil or hours == nil then
 		return
 	end
 	local now = os.time()
 	local last = kv_get(KV_CHECKED)
 	-- a last check in the future means the clock went back: it doesn't count
-	if type(last) == "number" and last <= now and now - last < CHECK_EVERY_S then
+	if type(last) == "number" and last <= now and now - last < (hours :: number) * 3600 - 60 then
 		return
 	end
 	local ok, key = pcall(function()
