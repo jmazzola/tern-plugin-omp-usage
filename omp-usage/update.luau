@@ -3,12 +3,13 @@
 -- the way Tern updates itself: quietly, until you choose.
 --
 -- At the interval the user picks (every 6 hours unless changed, or never), an automatic check fetches the checked-out
--- branch's upstream. When the branch is behind, it remembers the newest commit as the pending update, says so in a
--- toast, and every window shows an Update omp Usage button in its status line. That button, `omp Usage: Check for
--- updates…` and the settings panel's Check for Updates check again and open the update card: the version that's
--- available and the one you have (from `plugin.toml` on each side, else commit hashes), Download Update (a
--- fast-forward to the pending commit, after which Tern reloads the plugin), Skip This Version (no automatic toast or
--- button again until the upstream moves past it) and Not Now, over every new commit in full.
+-- branch's upstream. When the upstream has commits that change the plugin's folder or the omp extension (commits of
+-- only the README or its pictures don't count), it remembers the update as pending, says so in a toast, and every
+-- window shows an Update omp Usage button in its status line. That button, `omp Usage: Check for updates…` and the
+-- settings panel's Check for Updates check again and open the update card: the version that's available and the
+-- one you have (from `plugin.toml` on each side, else commit hashes), Download Update (a fast-forward to the
+-- upstream's tip, after which Tern reloads the plugin), Skip This Version (no automatic toast or button again until
+-- a newer commit changes the plugin) and Not Now, over every commit that changes it, in full.
 --
 -- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows that
 -- tick together claim the check, and the claim that lands last wins), and the pending update, a skipped version and
@@ -16,9 +17,10 @@
 
 -- How often the automatic check runs: `hours` nil is never.
 export type Interval = { id: string, label: string, hours: number? }
--- The update an automatic or manual check found, until it's downloaded or skipped: the newest upstream commit and
--- the version its `plugin.toml` says, when it says one.
-export type Pending = { sha: string, short: string, version: string? }
+-- The update an automatic or manual check found, until it's downloaded or skipped: the upstream's tip (what
+-- Download Update fast-forwards to), the version its `plugin.toml` says when it says one, and the newest commit that
+-- changes the plugin (what Skip This Version skips: a later push of only the README doesn't bring it back).
+export type Pending = { sha: string, short: string, version: string?, latest: string }
 
 type Module = {
 	INTERVALS: { Interval },
@@ -65,13 +67,18 @@ local LOADED_AT = os.time() -- when this VM started: an update announced before 
 -- No credential prompts or windows: a remote that needs them fails the check instead.
 local GIT_ENV = { GIT_TERMINAL_PROMPT = "0", GCM_INTERACTIVE = "never" }
 local UPDATE_ACTION = "plugin." .. tern.plugin.id .. ".update"
+-- What an update covers besides this plugin's own folder: the omp extension, at the top of the repo.
+local EXTENSION_DIR = "omp"
 
 type Git = { ok: boolean, out: string, err: string }
 type Commit = { sha: string, short: string, when: string, author: string, subject: string, body: string }
--- What a check found: the commits between HEAD and the upstream, newest first, and both sides' versions.
+-- What a check found: the commits between HEAD and the upstream that change the plugin, newest first (`behind` of
+-- them, `other` commits besides that don't), the upstream's tip, and both sides' versions.
 type Offer = {
 	head: string,
+	tip: string,
 	behind: number,
+	other: number,
 	commits: { Commit },
 	web: string?,
 	current: string?,
@@ -212,6 +219,7 @@ function M.pending(): Pending?
 			sha = value.sha,
 			short = value.short,
 			version = if type(value.version) == "string" then value.version else nil,
+			latest = if type(value.latest) == "string" then value.latest else value.sha,
 		}
 	end
 	return nil
@@ -437,20 +445,23 @@ local function commits_md(offer: Offer): string
 		table.insert(parts, "### " .. md_escape(commit.subject) .. "\n\n" .. meta .. (if body ~= "" then "\n\n" .. body else ""))
 	end
 	local rest = offer.behind - #offer.commits
+	local compare = if offer.web then offer.web .. "/compare/" .. offer.head .. "..." .. offer.tip else nil
 	if rest > 0 then
 		local more = "…and " .. plural(rest, "earlier commit")
-		if offer.web then
-			more = "[" .. more .. "](" .. offer.web .. "/compare/" .. offer.head .. "..." .. offer.commits[1].sha .. ")"
-		end
-		table.insert(parts, more)
+		table.insert(parts, if compare then "[" .. more .. "](" .. compare .. ")" else more)
+	end
+	if offer.other > 0 then
+		local besides = "Plus "
+			.. (if offer.other == 1 then "1 commit that doesn't" else tostring(offer.other) .. " commits that don't")
+			.. " change the plugin, such as README updates"
+		table.insert(parts, if compare then "[" .. besides .. "](" .. compare .. ")" else besides)
 	end
 	return table.concat(parts, "\n\n---\n\n")
 end
 
 local function card_view(offer: Offer): Node
 	local ui = tern.ui
-	local newest = offer.commits[1]
-	local name = update_name(offer.available, offer.current, newest.short)
+	local name = update_name(offer.available, offer.current, string.sub(offer.tip, 1, 7))
 	local have = offer.current or offer.head
 	local sub = "You have " .. have
 	if offer.available == nil or offer.available == offer.current then
@@ -536,7 +547,7 @@ local function skip(cx: WindowCx)
 	if pending == nil then
 		return
 	end
-	kv_set(KV_KEPT, pending.sha)
+	kv_set(KV_KEPT, pending.latest)
 	set_pending(nil)
 	cx:toast("info", "Skipped omp Usage " .. update_name(pending.version, M.version(), pending.short), "Update any time: omp Usage: Check for updates…")
 end
@@ -634,62 +645,103 @@ function M.check(cx: WindowCx, manual: boolean)
 						end
 						return
 					end
-					local log_args = {
-						"log",
-						"-n",
-						tostring(CARD_COMMITS),
-						"--format=%H%x1f%h%x1f%cr%x1f%an%x1f%s%x1f%b%x1e",
-						"HEAD..@{u}",
-					}
-					git(cx4, log_args, 10000, function(log: Git, cx5: WindowCx)
-						local commits: { Commit } = {}
-						for record in string.gmatch(log.out, "([^\30]*)\30") do
-							local sha, short, when, author, subject, body =
-								string.match(record, "^%s*(%x+)\31(%x+)\31([^\31]*)\31([^\31]*)\31([^\31]*)\31(.*)$")
-							if sha and short and when and author and subject and body then
-								table.insert(commits, {
-									sha = sha,
-									short = short,
-									when = when,
-									author = trim(author),
-									subject = trim(subject),
-									body = trim(body),
-								})
-							end
-						end
-						if not log.ok or #commits == 0 then
-							stop(cx5, "omp Usage can't list the update's commits", reason(log.err))
+					-- Only commits that change the plugin (this folder) or the omp extension (`omp/` at the top) make
+					-- an update: a push of the README or its pictures alone offers nothing. They come along with the
+					-- next real update, which fast-forwards to the upstream's tip.
+					local paths = { "--", ".", ":(top)" .. EXTENSION_DIR }
+					local count_args = { "rev-list", "--count", "HEAD..@{u}" }
+					for _, path in paths do
+						table.insert(count_args, path)
+					end
+					git(cx4, count_args, 10000, function(relevant_count: Git, cx5: WindowCx)
+						local relevant = tonumber(trim(relevant_count.out))
+						if not relevant_count.ok or relevant == nil then
+							stop(cx5, "omp Usage can't check for updates", reason(relevant_count.err))
 							return
 						end
-						local newest = commits[1]
-						git(cx5, { "show", newest.sha .. ":./plugin.toml" }, 10000, function(toml: Git, cx6: WindowCx)
-							local available = if toml.ok then toml_version(toml.out) else nil
-							git(cx6, { "ls-remote", "--get-url" }, 10000, function(url: Git, cx7: WindowCx)
-								busy = false
-								local offer: Offer = {
-									head = head,
-									behind = behind :: number,
-									commits = commits,
-									web = if url.ok then web_base(trim(url.out)) else nil,
-									current = M.version(),
-									available = available,
-								}
-								if not manual and kv_get(KV_KEPT) == newest.sha then
-									set_pending(nil) -- the user skipped this one
+						if relevant == 0 then
+							busy = false
+							set_pending(nil)
+							if manual then
+								local version = M.version()
+								cx5:toast(
+									"success",
+									"omp Usage is up to date",
+									(if version then version .. " · " else "") .. "newer commits don't change the plugin"
+								)
+							end
+							return
+						end
+						local log_args = {
+							"log",
+							"-n",
+							tostring(CARD_COMMITS),
+							"--format=%H%x1f%h%x1f%cr%x1f%an%x1f%s%x1f%b%x1e",
+							"HEAD..@{u}",
+						}
+						for _, path in paths do
+							table.insert(log_args, path)
+						end
+						git(cx5, log_args, 10000, function(log: Git, cx6: WindowCx)
+							local commits: { Commit } = {}
+							for record in string.gmatch(log.out, "([^\30]*)\30") do
+								local sha, short, when, author, subject, body =
+									string.match(record, "^%s*(%x+)\31(%x+)\31([^\31]*)\31([^\31]*)\31([^\31]*)\31(.*)$")
+								if sha and short and when and author and subject and body then
+									table.insert(commits, {
+										sha = sha,
+										short = short,
+										when = when,
+										author = trim(author),
+										subject = trim(subject),
+										body = trim(body),
+									})
+								end
+							end
+							if not log.ok or #commits == 0 then
+								stop(cx6, "omp Usage can't list the update's commits", reason(log.err))
+								return
+							end
+							local latest = commits[1].sha
+							git(cx6, { "rev-parse", "@{u}" }, 10000, function(up_rev: Git, cx7: WindowCx)
+								local tip = trim(up_rev.out)
+								if not up_rev.ok or not string.match(tip, "^%x+$") then
+									stop(cx7, "omp Usage can't check for updates", reason(up_rev.err))
 									return
 								end
-								local before = M.pending()
-								set_pending({ sha = newest.sha, short = newest.short, version = available })
-								if manual then
-									show_card(cx7, offer)
-								elseif before == nil or before.sha ~= newest.sha then
-									local name = update_name(available, offer.current, newest.short)
-									cx7:toast(
-										"info",
-										"omp Usage " .. name .. " is available",
-										"Update omp Usage in the status bar, or Check for Updates in its settings"
-									)
-								end
+								local tip_short = string.sub(tip, 1, 7)
+								git(cx7, { "show", tip .. ":./plugin.toml" }, 10000, function(toml: Git, cx8: WindowCx)
+									local available = if toml.ok then toml_version(toml.out) else nil
+									git(cx8, { "ls-remote", "--get-url" }, 10000, function(url: Git, cx9: WindowCx)
+										busy = false
+										local offer: Offer = {
+											head = head,
+											tip = tip,
+											behind = relevant :: number,
+											other = (behind :: number) - (relevant :: number),
+											commits = commits,
+											web = if url.ok then web_base(trim(url.out)) else nil,
+											current = M.version(),
+											available = available,
+										}
+										if not manual and kv_get(KV_KEPT) == latest then
+											set_pending(nil) -- the user skipped this one
+											return
+										end
+										local before = M.pending()
+										set_pending({ sha = tip, short = tip_short, version = available, latest = latest })
+										if manual then
+											show_card(cx9, offer)
+										elseif before == nil or before.latest ~= latest then
+											local name = update_name(available, offer.current, tip_short)
+											cx9:toast(
+												"info",
+												"omp Usage " .. name .. " is available",
+												"Update omp Usage in the status bar, or Check for Updates in its settings"
+											)
+										end
+									end)
+								end)
 							end)
 						end)
 					end)
