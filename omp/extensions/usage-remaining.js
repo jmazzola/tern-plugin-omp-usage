@@ -249,14 +249,19 @@ function appliesTo(bare, bares) {
   return (limit) => limitApplies(limit, bare, bares);
 }
 
-// Anthropic's Fable reset credits name the API meter, not omp's limit id.
+// Anthropic's Fable reset credits clear the Fable meter alone: omp's limit id,
+// or (older omp) the API meter. A full reset that also clears the Fable meter
+// counts on the general 7d window only, so each credit shows once.
 // A later Fable credit can be unavailable until the preceding one is used;
 // remainingCount and the report's availableCount still include it.
+const FABLE_METERS = ["anthropic:7d:fable", "anthropic:reset:seven_day_overage_included"];
+
 function creditApplies(c, report, limit, general) {
-  const fable = report.provider === "anthropic"
-    && c?.clears?.includes("anthropic:reset:seven_day_overage_included")
-    && limit.id === "anthropic:7d:fable";
-  if (fable) return c.remainingCount > 0 && (c.status === "available" || c.status === "unavailable");
+  if (report.provider === "anthropic" && limit.id === "anthropic:7d:fable") {
+    const clears = Array.isArray(c?.clears) ? c.clears : [];
+    return clears.some((id) => FABLE_METERS.includes(id)) && !clears.includes("anthropic:7d")
+      && c.remainingCount > 0 && (c.status === "available" || c.status === "unavailable");
+  }
   if (c?.status !== "available" || c.usable === false || c.remainingCount <= 0) return false;
   return Array.isArray(c.clears) ? c.clears.includes(limit.id) : general;
 }
