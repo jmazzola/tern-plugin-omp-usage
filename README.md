@@ -167,16 +167,24 @@ sessions started before the extension wrote the cache need a restart.
 The plugin checks for updates itself, at most every 6 hours: about 20 seconds after Tern loads it, and hourly
 after that, it fetches your clone's branch from its remote once 6 hours have passed since the last check (or an
 hour, when the last one couldn't reach the remote). When there are new commits, a picker asks what to do and
-lists them under **What's new**, newest first (the newest 15, then a row for any earlier ones; the list scrolls):
+lists them under **What's new**, newest first, one line each (the newest 15, then a row for any earlier ones):
 
-![The update prompt: Decide later, Update now (5 new commits, 712e85f to bee1ccc) and Keep this version, then the new commits under What's new](docs/images/update-prompt.png)
+![The update prompt: Decide later, Update now (6 new commits) and Keep this version, then Read all changes… and the new commits under What's new](docs/images/update-prompt.png)
 
 | Choice | What it does |
 | --- | --- |
 | **Decide later**, or Esc | Decides nothing; the next check asks again. The automatic prompt opens on its own over whatever has focus, so this row comes first there: an Enter you meant for something else doesn't update. Checking by hand puts **Update now** first instead |
 | **Update now** | Fast-forwards the clone to the newest commit shown and reloads Tern's plugins. If the update changed the omp extension, the toast says to restart omp sessions |
 | **Keep this version** | Stays where you are. The automatic check won't ask again until there's a commit newer than the one it offered |
-| A commit | Opens it on the web (for a GitHub-style remote) |
+| **Read all changes…**, or any commit | Opens the what's-new pane beside you (below) |
+
+A one-line row cuts off a long commit subject and has no room for the message, so **Read all changes…** opens a
+pane with every commit in full: its whole subject and message, its hash, age and author, and a link to it on the
+web (for a GitHub-style remote). The newest 100 show there, then a link to compare the rest. **Update now**,
+**Keep this version** and **Close** sit in its bottom bar and do what the picker's rows do; a pane left open across
+a plugin reload checks again when you click one, rather than act on what it showed.
+
+![The what's-new pane beside a terminal: each commit's full subject, hash, age, author and web link, a commit message with a bulleted list, and Update now, Keep this version and Close in the bottom bar](docs/images/whats-new-pane.png)
 
 Check by hand at any time with **omp Usage: Check for updates…** in the palette (it also offers a version you
 kept). To stop the automatic checks, pick **Check for updates automatically** in **omp Usage: Settings…**; pick

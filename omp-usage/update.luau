@@ -4,15 +4,20 @@
 -- Every few hours, and from `omp Usage: Check for updates…`, it fetches the checked-out branch's upstream. When
 -- the branch is behind, a picker lists the new commits under the choices: update (a fast-forward to the commit
 -- the picker showed, after which Tern reloads the plugin) or keep this version (no automatic prompt again until
--- the upstream moves past that commit). Esc decides nothing: the next check asks again. Picking a commit opens
--- it on the web when the remote is a web host. An automatic prompt opens over whatever has focus, so its first
--- row decides nothing too: Enter typed for something else doesn't update.
+-- the upstream moves past that commit). Esc decides nothing: the next check asks again. Picking a commit, or
+-- Read all changes…, opens the what's-new pane with every commit in full. An automatic prompt opens over
+-- whatever has focus, so its first row decides nothing too: Enter typed for something else doesn't update.
 --
 -- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows
 -- that tick together claim the check, and the claim that lands last wins) and a version kept in one window is
 -- kept in all of them.
 
-local M = {}
+type Module = {
+	auto: () -> boolean,
+	check: (cx: WindowCx, manual: boolean) -> (),
+	set_auto: (cx: WindowCx, on: boolean) -> (),
+}
+local M = {} :: Module
 
 local KV_AUTO = "omp-usage.update-auto" -- false: no automatic checks (absent: on)
 local KV_CHECKED = "omp-usage.update-checked" -- os.time() of the last automatic check
@@ -23,12 +28,14 @@ local FIRST_CHECK_MS = 20 * 1000 -- after a load, past Tern's own startup work
 local CLAIM_SETTLE_MS = 2000 -- long enough for every window ticking with this one to write its claim
 local TICK_MS = 60 * 60 * 1000
 local CHECK_EVERY_S = 6 * 60 * 60
-local SHOWN_COMMITS = 15
+local SHOWN_COMMITS = 15 -- rows in the picker
+local PANE_COMMITS = 100 -- commits the what's-new pane shows in full
+local BODY_MAX = 4000 -- characters of one commit's message body the pane shows
 -- No credential prompts or windows: a remote that needs them fails the check instead.
 local GIT_ENV = { GIT_TERMINAL_PROMPT = "0", GCM_INTERACTIVE = "never" }
 
 type Git = { ok: boolean, out: string, err: string }
-type Commit = { sha: string, short: string, when: string, subject: string }
+type Commit = { sha: string, short: string, when: string, author: string, subject: string, body: string }
 type Offer = { head: string, behind: number, commits: { Commit }, web: string? }
 
 local function kv_get(key: string): any
@@ -129,6 +136,152 @@ local function apply(cx: WindowCx, offer: Offer)
 	end)
 end
 
+local function keep(cx: WindowCx, offer: Offer)
+	kv_set(KV_KEPT, offer.commits[1].sha)
+	cx:toast("info", "Keeping omp Usage at " .. offer.head, "Update any time: omp Usage: Check for updates…")
+end
+
+-- The what's-new pane: a canvas beside the focused pane with every commit in full (the picker's rows are one
+-- line each, so long subjects get cut and bodies don't show), and Update now / Keep this version / Close in its
+-- bottom bar. It opens from the picker; its clicks arrive as `canvas_action` events. Tern keeps canvases across
+-- reloads but the offer it shows lives in this VM, so a click on a pane that outlived it checks again.
+local PANE_TITLE = "omp Usage: what's new"
+local PANE_ABOUT = "The commits an omp Usage update would bring, in full. Update now fast-forwards the plugin's git "
+	.. "clone to the newest of them and reloads Tern's plugins; Keep this version skips this update; Close closes "
+	.. "this panel. Nothing changes until one of them is clicked."
+local pane_offer: Offer? = nil
+
+local function md_escape(text: string): string
+	return (string.gsub(text, "([\\`*_%[%]<>|#])", "\\%1"))
+end
+
+-- A message body with its hard wraps undone (git messages wrap at ~72 columns, and Tern's Markdown keeps every
+-- line break): a line joins the one before it unless either is blank, it starts a list item, heading, quote,
+-- table row or code fence, or it's inside a fenced block.
+local function unwrap(body: string): string
+	local out: { string } = {}
+	local fenced = false
+	local joinable = false -- whether the last line out can take the next one
+	for raw in string.gmatch(body .. "\n", "([^\n]*)\n") do
+		local line = (string.gsub(raw, "\r$", ""))
+		local fence = string.find(line, "^%s*```") ~= nil
+		local starts_block = fence
+			or string.find(line, "^%s*[-*+] ") ~= nil
+			or string.find(line, "^%s*%d+[.)] ") ~= nil
+			or string.find(line, "^%s*[#>|]") ~= nil
+		local blank = string.find(line, "%S") == nil
+		if not fenced and joinable and not blank and not starts_block then
+			out[#out] ..= " " .. trim(line)
+		else
+			table.insert(out, line)
+		end
+		if fence then
+			fenced = not fenced
+		end
+		joinable = not fenced and not fence and not blank
+	end
+	return table.concat(out, "\n")
+end
+
+local function pane_md(offer: Offer): string
+	local newest = offer.commits[1]
+	local parts = {
+		string.format(
+			"**%s** · your clone is at `%s`, the newest is `%s`",
+			plural(offer.behind, "new commit"),
+			offer.head,
+			newest.short
+		),
+	}
+	for _, commit in offer.commits do
+		local meta = "`" .. commit.short .. "` · " .. md_escape(commit.when) .. " · " .. md_escape(commit.author)
+		if offer.web then
+			meta ..= " · [on the web](" .. offer.web .. "/commit/" .. commit.sha .. ")"
+		end
+		local body = unwrap(commit.body)
+		if #body > BODY_MAX then
+			body = string.sub(body, 1, BODY_MAX) .. "…"
+		end
+		table.insert(parts, "---\n\n### " .. md_escape(commit.subject) .. "\n\n" .. meta .. (if body ~= "" then "\n\n" .. body else ""))
+	end
+	local rest = offer.behind - #offer.commits
+	if rest > 0 then
+		local more = "…and " .. plural(rest, "earlier commit")
+		if offer.web then
+			more = "[" .. more .. "](" .. offer.web .. "/compare/" .. offer.head .. "..." .. newest.sha .. ")"
+		end
+		table.insert(parts, "---\n\n" .. more)
+	end
+	return table.concat(parts, "\n\n")
+end
+
+local function find_pane(cx: WindowCx): number?
+	local ok, list = pcall(function(): any
+		return cx.canvas:list()
+	end)
+	if ok and type(list) == "table" then
+		for _, info in list do
+			if info.owner == tern.plugin.id and info.title == PANE_TITLE then
+				return info.pane
+			end
+		end
+	end
+	return nil
+end
+
+local function close_pane(cx: WindowCx, pane: number)
+	pane_offer = nil
+	pcall(function()
+		cx.layout:close(pane)
+	end)
+end
+
+local function show_pane(cx: WindowCx, offer: Offer)
+	pane_offer = offer
+	local md = pane_md(offer)
+	local dock = tern.ui.row({
+		tern.ui.button("Update now", { icon = "download", variant = "primary", actions = { click = "update" } }),
+		tern.ui.button("Keep this version", { icon = "pin", actions = { click = "keep" } }),
+		tern.ui.button("Close", { variant = "quiet", actions = { click = "close" } }),
+	})
+	local pane = find_pane(cx)
+	if pane and pcall(function()
+		cx.canvas:set(pane :: number, { md = md, dock = dock })
+		cx.layout:focus(pane :: number)
+	end) then
+		return
+	end
+	local ok, opened, err = pcall(function()
+		return cx.canvas:open({ title = PANE_TITLE, about = PANE_ABOUT, md = md, dock = dock, how = "beside" })
+	end)
+	if not ok or opened == nil then
+		pane_offer = nil
+		cx:toast("error", "omp Usage couldn't show what's new", tostring(if ok then err else opened))
+	end
+end
+
+tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
+	if ev.title ~= PANE_TITLE then
+		return false
+	end
+	local offer = pane_offer
+	if ev.act == "close" then
+		close_pane(cx, ev.pane)
+	elseif ev.act ~= "update" and ev.act ~= "keep" then
+		return false
+	elseif offer == nil then -- the plugin reloaded since the pane opened: what it shows may be stale
+		close_pane(cx, ev.pane)
+		M.check(cx, true)
+	elseif ev.act == "update" then
+		close_pane(cx, ev.pane)
+		apply(cx, offer)
+	else
+		close_pane(cx, ev.pane)
+		keep(cx, offer)
+	end
+	return true
+end)
+
 -- Asks. `busy` stays set while the picker is open, so a later check in this window (the next tick, the
 -- command) can't stack a second picker behind it. `manual` (the user asked) puts Update now first.
 local function prompt(cx: WindowCx, offer: Offer, manual: boolean)
@@ -158,26 +311,33 @@ local function prompt(cx: WindowCx, offer: Offer, manual: boolean)
 		icon = "pin",
 		pick = "keep",
 	})
-	local web = offer.web
-	for _, commit in offer.commits do
+	table.insert(items, {
+		label = "Read all changes…",
+		detail = "every commit in full, in a pane beside this one",
+		group = "What's new",
+		icon = "list",
+		pick = "read",
+	})
+	for i, commit in offer.commits do
+		if i > SHOWN_COMMITS then
+			break
+		end
 		table.insert(items, {
 			label = commit.subject,
 			detail = commit.short .. " · " .. commit.when,
 			group = "What's new",
 			icon = "sparkle",
-			pick = "open",
-			url = if web then web .. "/commit/" .. commit.sha else nil,
+			pick = "read",
 		})
 	end
-	local rest = offer.behind - #offer.commits
+	local rest = offer.behind - math.min(#offer.commits, SHOWN_COMMITS)
 	if rest > 0 then
 		table.insert(items, {
 			label = plural(rest, "earlier commit"),
-			detail = if web then "compare on the web" else nil,
+			detail = "in the pane",
 			group = "What's new",
 			icon = "list",
-			pick = "open",
-			url = if web then web .. "/compare/" .. offer.head .. "..." .. newest.sha else nil,
+			pick = "read",
 		})
 	end
 	local function answer(item: PickItem?, _err: string?, next_cx: WindowCx?)
@@ -190,12 +350,9 @@ local function prompt(cx: WindowCx, offer: Offer, manual: boolean)
 		if choice.pick == "update" then
 			apply(cx2, offer)
 		elseif choice.pick == "keep" then
-			kv_set(KV_KEPT, newest.sha)
-			cx2:toast("info", "Keeping omp Usage at " .. offer.head, "Update any time: omp Usage: Check for updates…")
-		elseif choice.url then
-			cx2:open(choice.url)
-		else
-			prompt(cx2, offer, manual) -- nothing to open: back to the choice
+			keep(cx2, offer)
+		elseif choice.pick == "read" then
+			show_pane(cx2, offer)
 		end
 	end
 	local opened, err = pcall(function()
@@ -275,13 +432,27 @@ function M.check(cx: WindowCx, manual: boolean)
 						end
 						return
 					end
-					local log_args = { "log", "-n", tostring(SHOWN_COMMITS), "--format=%H%x1f%h%x1f%cr%x1f%s", "HEAD..@{u}" }
+					local log_args = {
+						"log",
+						"-n",
+						tostring(PANE_COMMITS),
+						"--format=%H%x1f%h%x1f%cr%x1f%an%x1f%s%x1f%b%x1e",
+						"HEAD..@{u}",
+					}
 					git(cx4, log_args, 10000, function(log: Git, cx5: WindowCx)
 						local commits: { Commit } = {}
-						for line in string.gmatch(log.out, "[^\n]+") do
-							local sha, short, when, subject = string.match(line, "^(%x+)\31(%x+)\31([^\31]*)\31(.*)$")
-							if sha and short and when and subject then
-								table.insert(commits, { sha = sha, short = short, when = when, subject = trim(subject) })
+						for record in string.gmatch(log.out, "([^\30]*)\30") do
+							local sha, short, when, author, subject, body =
+								string.match(record, "^%s*(%x+)\31(%x+)\31([^\31]*)\31([^\31]*)\31([^\31]*)\31(.*)$")
+							if sha and short and when and author and subject and body then
+								table.insert(commits, {
+									sha = sha,
+									short = short,
+									when = when,
+									author = trim(author),
+									subject = trim(subject),
+									body = trim(body),
+								})
 							end
 						end
 						if not log.ok or #commits == 0 then
