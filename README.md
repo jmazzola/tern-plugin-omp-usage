@@ -169,7 +169,7 @@ after that, it fetches your clone's branch from its remote once 6 hours have pas
 hour, when the last one couldn't reach the remote). When there are new commits, a picker asks what to do and
 lists them under **What's new**, newest first, one line each (the newest 15, then a row for any earlier ones):
 
-![The update prompt: Decide later, Update now (6 new commits) and Keep this version, then Read all changes… and the new commits under What's new](docs/images/update-prompt.png)
+![The update prompt: Decide later, Update now (7 new commits, 712e85f to ea662f9) and Keep this version, then Read all changes… and the new commits under What's new](docs/images/update-prompt.png)
 
 | Choice | What it does |
 | --- | --- |
@@ -184,7 +184,7 @@ web (for a GitHub-style remote). The newest 100 show there, then a link to compa
 **Keep this version** and **Close** sit in its bottom bar and do what the picker's rows do; a pane left open across
 a plugin reload checks again when you click one, rather than act on what it showed.
 
-![The what's-new pane beside a terminal: each commit's full subject, hash, age, author and web link, a commit message with a bulleted list, and Update now, Keep this version and Close in the bottom bar](docs/images/whats-new-pane.png)
+![The what's-new pane: each commit's full subject, hash, age, author and web link, a commit message with a bulleted list, and Update now, Keep this version and Close in the bottom bar](docs/images/whats-new-pane.png)
 
 Check by hand at any time with **omp Usage: Check for updates…** in the palette (it also offers a version you
 kept). To stop the automatic checks, pick **Check for updates automatically** in **omp Usage: Settings…**; pick
