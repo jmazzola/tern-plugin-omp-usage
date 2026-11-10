@@ -1,26 +1,35 @@
 --!strict
--- Updates for this plugin's git clone (the README installs it as a clone that `tern plugin link` loads in place).
+-- Updates for this plugin's git clone (the README installs it as a clone that `tern plugin link` loads in place),
+-- the way Tern updates itself: quietly, until you choose.
 --
--- At the interval the user picks (every 6 hours unless changed, or never), and from `omp Usage: Check for updates…`
--- or the settings panel's Check for updates, it fetches the checked-out branch's upstream. When
--- the branch is behind, a picker lists the new commits under the choices: update (a fast-forward to the commit
--- the picker showed, after which Tern reloads the plugin) or keep this version (no automatic prompt again until
--- the upstream moves past that commit). Esc decides nothing: the next check asks again. Picking a commit, or
--- Read all changes…, opens the what's-new pane with every commit in full. An automatic prompt opens over
--- whatever has focus, so its first row decides nothing too: Enter typed for something else doesn't update.
+-- At the interval the user picks (every 6 hours unless changed, or never), an automatic check fetches the checked-out
+-- branch's upstream. When the branch is behind, it remembers the newest commit as the pending update, says so in a
+-- toast, and every window shows an Update omp Usage button in its status line. That button, `omp Usage: Check for
+-- updates…` and the settings panel's Check for Updates check again and open the update card: the version that's
+-- available and the one you have (from `plugin.toml` on each side, else commit hashes), Download Update (a
+-- fast-forward to the pending commit, after which Tern reloads the plugin), Skip This Version (no automatic toast or
+-- button again until the upstream moves past it) and Not Now, over every new commit in full.
 --
--- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows
--- that tick together claim the check, and the claim that lands last wins) and a version kept in one window is
--- kept in all of them.
+-- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows that
+-- tick together claim the check, and the claim that lands last wins), and the pending update, a skipped version and
+-- the interval are the same in all of them.
 
 -- How often the automatic check runs: `hours` nil is never.
 export type Interval = { id: string, label: string, hours: number? }
+-- The update an automatic or manual check found, until it's downloaded or skipped: the newest upstream commit and
+-- the version its `plugin.toml` says, when it says one.
+export type Pending = { sha: string, short: string, version: string? }
 
 type Module = {
 	INTERVALS: { Interval },
 	interval: () -> Interval,
 	set_interval: (cx: WindowCx, id: string) -> (),
+	version: () -> string?,
+	pending: () -> Pending?,
+	last_checked: () -> number?,
 	check: (cx: WindowCx, manual: boolean) -> (),
+	download: (cx: WindowCx) -> (),
+	status_segment: () -> StatusSegment?,
 }
 local M = {} :: Module
 
@@ -35,22 +44,33 @@ local DEFAULT_INTERVAL = "6h"
 
 local KV_EVERY = "omp-usage.update-every" -- an INTERVALS id
 local KV_AUTO = "omp-usage.update-auto" -- 0.2.0's on/off switch: false is read as `off` until an interval is set
-local KV_CHECKED = "omp-usage.update-checked" -- os.time() of the last automatic check
-local KV_KEPT = "omp-usage.update-kept" -- the upstream commit the user kept their version over
-local KV_CLAIM = "omp-usage.update-claim" -- the window that claimed it
+local KV_CHECKED = "omp-usage.update-checked" -- os.time() of the last automatic check, reached or not
+local KV_LAST = "omp-usage.update-last" -- os.time() of the last check that reached the remote
+local KV_PENDING = "omp-usage.update-pending" -- a Pending
+local KV_KEPT = "omp-usage.update-kept" -- the upstream commit the user skipped
+local KV_CLAIM = "omp-usage.update-claim" -- the window that claimed the automatic check
 
 local FIRST_CHECK_MS = 20 * 1000 -- after a load, past Tern's own startup work
 local CLAIM_SETTLE_MS = 2000 -- long enough for every window ticking with this one to write its claim
 local TICK_MS = 60 * 60 * 1000 -- how often each window looks whether a check is due: the shortest interval
-local SHOWN_COMMITS = 15 -- rows in the picker
-local PANE_COMMITS = 100 -- commits the what's-new pane shows in full
-local BODY_MAX = 4000 -- characters of one commit's message body the pane shows
+local BADGE_POLL_MS = 10 * 1000 -- how soon a window shows (or drops) the status button another window decided
+local CARD_COMMITS = 100 -- commits the update card shows in full
+local BODY_MAX = 4000 -- characters of one commit's message body the card shows
 -- No credential prompts or windows: a remote that needs them fails the check instead.
 local GIT_ENV = { GIT_TERMINAL_PROMPT = "0", GCM_INTERACTIVE = "never" }
+local UPDATE_ACTION = "plugin." .. tern.plugin.id .. ".update"
 
 type Git = { ok: boolean, out: string, err: string }
 type Commit = { sha: string, short: string, when: string, author: string, subject: string, body: string }
-type Offer = { head: string, behind: number, commits: { Commit }, web: string? }
+-- What a check found: the commits between HEAD and the upstream, newest first, and both sides' versions.
+type Offer = {
+	head: string,
+	behind: number,
+	commits: { Commit },
+	web: string?,
+	current: string?,
+	available: string?,
+}
 
 local function kv_get(key: string): any
 	local ok, value = pcall(tern.kv.get, key)
@@ -63,6 +83,16 @@ end
 
 local function trim(text: string): string
 	return (string.gsub(text, "^%s+", ""):gsub("%s+$", ""))
+end
+
+local function plural(n: number, word: string): string
+	return tostring(n) .. " " .. word .. (if n == 1 then "" else "s")
+end
+
+-- The `version = "…"` of a plugin.toml's text.
+local function toml_version(text: string): string?
+	local version = string.match("\n" .. text, '\n%s*version%s*=%s*"([^"\n]+)"')
+	return if version then trim(version) else nil
 end
 
 -- git's message for a failure: its first `fatal:` or `error:` line without the prefix (git prints warnings, such
@@ -120,10 +150,6 @@ local function web_base(url: string): string?
 	return "https://" .. host .. "/" .. (string.gsub(path :: string, "%.git/?$", ""):gsub("/$", ""))
 end
 
-local function plural(n: number, word: string): string
-	return tostring(n) .. " " .. word .. (if n == 1 then "" else "s")
-end
-
 function M.interval(): Interval
 	local id = kv_get(KV_EVERY)
 	if id == nil and kv_get(KV_AUTO) == false then
@@ -141,21 +167,115 @@ function M.interval(): Interval
 	return fallback
 end
 
-local busy = false -- a check, or the prompt it opened, is under way in this window
+-- Sets how often the automatic check runs.
+function M.set_interval(cx: WindowCx, id: string)
+	local chosen: Interval? = nil
+	for _, interval in M.INTERVALS do
+		if interval.id == id then
+			chosen = interval
+		end
+	end
+	if chosen == nil then
+		return
+	end
+	kv_set(KV_EVERY, id)
+	kv_set(KV_AUTO, nil)
+	if chosen.hours then
+		cx:toast("info", "omp Usage checks for updates " .. string.lower(chosen.label))
+	else
+		cx:toast("info", "omp Usage won't check for updates on its own", "Check any time: omp Usage: Check for updates…")
+	end
+end
 
-local function apply(cx: WindowCx, offer: Offer)
-	local target = offer.commits[1]
+-- This clone's version, from its plugin.toml (read once: an update reloads the plugin).
+local this_version: string? = nil
+local version_read = false
+function M.version(): string?
+	if not version_read then
+		version_read = true
+		local ok, text = pcall(tern.fs.read, "plugin.toml", 64 * 1024)
+		this_version = if ok and type(text) == "string" then toml_version(text) else nil
+	end
+	return this_version
+end
+
+function M.pending(): Pending?
+	local value = kv_get(KV_PENDING)
+	if type(value) == "table" and type(value.sha) == "string" and type(value.short) == "string" then
+		return {
+			sha = value.sha,
+			short = value.short,
+			version = if type(value.version) == "string" then value.version else nil,
+		}
+	end
+	return nil
+end
+
+function M.last_checked(): number?
+	local value = kv_get(KV_LAST)
+	return if type(value) == "number" then value else nil
+end
+
+-- What an update is called: its version when plugin.toml moved, else its commit.
+local function update_name(version: string?, current: string?, short: string): string
+	if version and version ~= current then
+		return version
+	end
+	return short
+end
+
+-- The status line's Update omp Usage button: every pane of every window, while an update is pending. Formatters
+-- must be pure and fast, so it reads what `refresh_badge` last saw rather than `tern.kv`.
+local badge: Pending? = nil
+
+function M.status_segment(): StatusSegment?
+	if badge == nil then
+		return nil
+	end
+	return { text = "Update omp Usage", icon = "download", tone = "accent", command = UPDATE_ACTION }
+end
+
+local function refresh_badge()
+	local now = M.pending()
+	if (now and now.sha) ~= (badge and badge.sha) then
+		badge = now
+		pcall(tern.chrome.refresh)
+	end
+end
+
+local function badge_poll(_cx: WindowCx?)
+	tern.timer(BADGE_POLL_MS, badge_poll)
+	refresh_badge()
+end
+tern.timer(0, badge_poll)
+
+local function set_pending(pending: Pending?)
+	kv_set(KV_PENDING, pending)
+	refresh_badge()
+end
+
+local busy = false -- a check is under way in this window
+
+local function apply(cx: WindowCx, pending: Pending)
+	if busy then
+		cx:toast("info", "omp Usage is already checking or updating")
+		return
+	end
+	busy = true
+	local name = update_name(pending.version, M.version(), pending.short)
 	-- Whether the omp extension changed: omp loads it at session start, so open sessions need a restart.
-	git(cx, { "diff", "--name-only", "HEAD", target.sha }, 10000, function(diff: Git, cx2: WindowCx)
+	git(cx, { "diff", "--name-only", "HEAD", pending.sha }, 10000, function(diff: Git, cx2: WindowCx)
 		local extension = diff.ok and string.find("\n" .. diff.out, "\nomp/") ~= nil
-		git(cx2, { "merge", "--ff-only", "--quiet", target.sha }, 30000, function(merge: Git, cx3: WindowCx)
+		git(cx2, { "merge", "--ff-only", "--quiet", pending.sha }, 30000, function(merge: Git, cx3: WindowCx)
+			busy = false
 			if not merge.ok then
 				cx3:toast("error", "omp Usage didn't update", reason(merge.err))
 				return
 			end
 			kv_set(KV_KEPT, nil)
+			set_pending(nil)
 			local sub = if extension then "The omp extension changed: restart omp sessions" else nil
-			cx3:toast("success", "omp Usage updated to " .. target.short, sub)
+			cx3:toast("success", "omp Usage updated to " .. name, sub)
 			pcall(function()
 				cx3:command("reload_plugins") -- Tern's watch of the clone reloads it too
 			end)
@@ -163,20 +283,69 @@ local function apply(cx: WindowCx, offer: Offer)
 	end)
 end
 
-local function keep(cx: WindowCx, offer: Offer)
-	kv_set(KV_KEPT, offer.commits[1].sha)
-	cx:toast("info", "Keeping omp Usage at " .. offer.head, "Update any time: omp Usage: Check for updates…")
-end
-
--- The what's-new pane: a canvas beside the focused pane with every commit in full (the picker's rows are one
--- line each, so long subjects get cut and bodies don't show), and Update now / Keep this version / Close in its
--- bottom bar. It opens from the picker; its clicks arrive as `canvas_action` events. Tern keeps canvases across
--- reloads but the offer it shows lives in this VM, so a click on a pane that outlived it checks again.
-local PANE_TITLE = "omp Usage: what's new"
-local PANE_ABOUT = "The commits an omp Usage update would bring, in full. Update now fast-forwards the plugin's git "
-	.. "clone to the newest of them and reloads Tern's plugins; Keep this version skips this update; Close closes "
-	.. "this panel. Nothing changes until one of them is clicked."
-local pane_offer: Offer? = nil
+-- The update card: a canvas beside the focused pane, headed by the version that's available and the one you have,
+-- with Download Update, Skip This Version and Not Now in its bottom bar and every new commit in full beneath.
+-- Its buttons act on the pending update in `tern.kv`, so a card left open across a reload still works.
+local CARD_TITLE = "omp Usage update"
+local CARD_ABOUT = "An update to the omp Usage plugin: the version that's available, the one installed, and every new "
+	.. "commit. Download Update fast-forwards the plugin's git clone and reloads Tern's plugins; Skip This Version "
+	.. "hides this update until a newer one; Not Now closes this panel. Nothing changes until one of them is clicked."
+local CARD_ROLE = "omp-usage.update"
+local CARD_SHEET = "update-card"
+local C = "[data-role='" .. CARD_ROLE .. "']"
+local CARD_CSS = string.gsub(
+	[==[
+$C {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+	padding: 22px 24px 30px;
+	font: 400 12.5px/18px var(--sans);
+	color: var(--t2);
+}
+$C .ouu-head {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding-bottom: 18px;
+	border-bottom: 1px solid var(--l2);
+}
+$C .ouu-icon {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	border-radius: 11px;
+	color: var(--accent);
+	background-color: rgb(from var(--accent) r g b / 14%);
+	box-shadow: inset 0 0 0 1px rgb(from var(--accent) r g b / 30%);
+}
+$C .ouu-say {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+$C .ouu-title {
+	font: 600 16px/22px var(--sans);
+	color: var(--t1);
+}
+$C .ouu-sub {
+	font: 400 12px/16px var(--sans);
+	color: var(--t3);
+}
+$C .ouu-label {
+	font: 600 10px/14px var(--mono);
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--t2);
+}
+]==],
+	"%$C",
+	C
+)
 
 local function md_escape(text: string): string
 	return (string.gsub(text, "([\\`*_%[%]<>|#])", "\\%1"))
@@ -210,16 +379,9 @@ local function unwrap(body: string): string
 	return table.concat(out, "\n")
 end
 
-local function pane_md(offer: Offer): string
-	local newest = offer.commits[1]
-	local parts = {
-		string.format(
-			"**%s** · your clone is at `%s`, the newest is `%s`",
-			plural(offer.behind, "new commit"),
-			offer.head,
-			newest.short
-		),
-	}
+-- Every new commit, newest first: its subject, hash, age, author and web link, then its message.
+local function commits_md(offer: Offer): string
+	local parts: { string } = {}
 	for _, commit in offer.commits do
 		local meta = "`" .. commit.short .. "` · " .. md_escape(commit.when) .. " · " .. md_escape(commit.author)
 		if offer.web then
@@ -229,26 +391,58 @@ local function pane_md(offer: Offer): string
 		if #body > BODY_MAX then
 			body = string.sub(body, 1, BODY_MAX) .. "…"
 		end
-		table.insert(parts, "---\n\n### " .. md_escape(commit.subject) .. "\n\n" .. meta .. (if body ~= "" then "\n\n" .. body else ""))
+		table.insert(parts, "### " .. md_escape(commit.subject) .. "\n\n" .. meta .. (if body ~= "" then "\n\n" .. body else ""))
 	end
 	local rest = offer.behind - #offer.commits
 	if rest > 0 then
 		local more = "…and " .. plural(rest, "earlier commit")
 		if offer.web then
-			more = "[" .. more .. "](" .. offer.web .. "/compare/" .. offer.head .. "..." .. newest.sha .. ")"
+			more = "[" .. more .. "](" .. offer.web .. "/compare/" .. offer.head .. "..." .. offer.commits[1].sha .. ")"
 		end
-		table.insert(parts, "---\n\n" .. more)
+		table.insert(parts, more)
 	end
-	return table.concat(parts, "\n\n")
+	return table.concat(parts, "\n\n---\n\n")
 end
 
-local function find_pane(cx: WindowCx): number?
+local function card_view(offer: Offer): Node
+	local ui = tern.ui
+	local newest = offer.commits[1]
+	local name = update_name(offer.available, offer.current, newest.short)
+	local have = offer.current or offer.head
+	local sub = "You have " .. have
+	if offer.available == nil or offer.available == offer.current then
+		sub ..= " (" .. offer.head .. ")"
+	end
+	sub ..= " · " .. plural(offer.behind, "new commit")
+	return ui.el("div", { role = CARD_ROLE }, {
+		ui.el("div", { class = "ouu-head" }, {
+			ui.el("span", { class = "ouu-icon" }, { ui.node("icon", { name = "download" }) }),
+			ui.el("div", { class = "ouu-say" }, {
+				ui.el("span", { class = "ouu-title", text = "omp Usage " .. name .. " is available" }),
+				ui.el("span", { class = "ouu-sub", text = sub }),
+			}),
+		}),
+		ui.el("span", { class = "ouu-label", text = "What's new" }),
+		ui.md(commits_md(offer)),
+	})
+end
+
+local function card_dock(): Node
+	local ui = tern.ui
+	return ui.row({
+		ui.button("Download Update", { icon = "download", variant = "primary", actions = { click = "download" } }),
+		ui.button("Skip This Version", { actions = { click = "skip" } }),
+		ui.button("Not Now", { variant = "quiet", actions = { click = "later" } }),
+	})
+end
+
+local function find_card(cx: WindowCx): number?
 	local ok, list = pcall(function(): any
 		return cx.canvas:list()
 	end)
 	if ok and type(list) == "table" then
 		for _, info in list do
-			if info.owner == tern.plugin.id and info.title == PANE_TITLE then
+			if info.owner == tern.plugin.id and info.title == CARD_TITLE then
 				return info.pane
 			end
 		end
@@ -256,152 +450,85 @@ local function find_pane(cx: WindowCx): number?
 	return nil
 end
 
-local function close_pane(cx: WindowCx, pane: number)
-	pane_offer = nil
-	pcall(function()
-		cx.layout:close(pane)
-	end)
+local function close_card(cx: WindowCx, pane: number?)
+	local card = pane or find_card(cx)
+	if card then
+		pcall(function()
+			cx.layout:close(card :: number)
+		end)
+	end
 end
 
-local function show_pane(cx: WindowCx, offer: Offer)
-	pane_offer = offer
-	local md = pane_md(offer)
-	local dock = tern.ui.row({
-		tern.ui.button("Update now", { icon = "download", variant = "primary", actions = { click = "update" } }),
-		tern.ui.button("Keep this version", { icon = "pin", actions = { click = "keep" } }),
-		tern.ui.button("Close", { variant = "quiet", actions = { click = "close" } }),
-	})
-	local pane = find_pane(cx)
-	if pane and pcall(function()
-		cx.canvas:set(pane :: number, { md = md, dock = dock })
-		cx.layout:focus(pane :: number)
+local function show_card(cx: WindowCx, offer: Offer)
+	pcall(tern.css, CARD_SHEET, CARD_CSS)
+	local view, dock = card_view(offer), card_dock()
+	local card = find_card(cx)
+	if card and pcall(function()
+		cx.canvas:set(card :: number, { view = view, dock = dock })
+		cx.layout:focus(card :: number)
 	end) then
 		return
 	end
 	local ok, opened, err = pcall(function()
-		return cx.canvas:open({ title = PANE_TITLE, about = PANE_ABOUT, md = md, dock = dock, how = "beside" })
+		return cx.canvas:open({ title = CARD_TITLE, about = CARD_ABOUT, view = view, dock = dock, how = "beside" })
 	end)
 	if not ok or opened == nil then
-		pane_offer = nil
-		cx:toast("error", "omp Usage couldn't show what's new", tostring(if ok then err else opened))
+		cx:toast("error", "omp Usage couldn't show the update", tostring(if ok then err else opened))
 	end
 end
 
+-- Download Update: the pending update, whichever window found it.
+function M.download(cx: WindowCx)
+	local pending = M.pending()
+	if pending == nil then
+		M.check(cx, true) -- nothing pending any more (taken or skipped elsewhere): look again
+		return
+	end
+	apply(cx, pending)
+end
+
+local function skip(cx: WindowCx)
+	local pending = M.pending()
+	if pending == nil then
+		return
+	end
+	kv_set(KV_KEPT, pending.sha)
+	set_pending(nil)
+	cx:toast("info", "Skipped omp Usage " .. update_name(pending.version, M.version(), pending.short), "Update any time: omp Usage: Check for updates…")
+end
+
 tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
-	if ev.title ~= PANE_TITLE then
+	if ev.title ~= CARD_TITLE then
 		return false
 	end
-	local offer = pane_offer
-	if ev.act == "close" then
-		close_pane(cx, ev.pane)
-	elseif ev.act ~= "update" and ev.act ~= "keep" then
-		return false
-	elseif offer == nil then -- the plugin reloaded since the pane opened: what it shows may be stale
-		close_pane(cx, ev.pane)
-		M.check(cx, true)
-	elseif ev.act == "update" then
-		close_pane(cx, ev.pane)
-		apply(cx, offer)
+	if ev.act == "download" then
+		close_card(cx, ev.pane)
+		M.download(cx)
+	elseif ev.act == "skip" then
+		close_card(cx, ev.pane)
+		skip(cx)
+	elseif ev.act == "later" then
+		close_card(cx, ev.pane)
 	else
-		close_pane(cx, ev.pane)
-		keep(cx, offer)
+		return false
 	end
 	return true
 end)
 
--- Asks. `busy` stays set while the picker is open, so a later check in this window (the next tick, the
--- command) can't stack a second picker behind it. `manual` (the user asked) puts Update now first.
-local function prompt(cx: WindowCx, offer: Offer, manual: boolean)
-	busy = true
-	local newest = offer.commits[1]
-	local items: { PickItem } = {}
-	if not manual then
-		table.insert(items, {
-			label = "Decide later",
-			detail = "ask again at the next check, like Esc",
-			group = "omp Usage update",
-			icon = "moon",
-			pick = "later",
-		})
+-- A reload drops the card's sheet; put it back for a card Tern kept.
+tern.timer(500, function(cx: WindowCx?)
+	if cx and find_card(cx) then
+		pcall(tern.css, CARD_SHEET, CARD_CSS)
 	end
-	table.insert(items, {
-		label = "Update now",
-		detail = plural(offer.behind, "new commit") .. " · " .. offer.head .. " → " .. newest.short,
-		group = "omp Usage update",
-		icon = "download",
-		pick = "update",
-	})
-	table.insert(items, {
-		label = "Keep this version",
-		detail = "stay on " .. offer.head .. " until a newer update",
-		group = "omp Usage update",
-		icon = "pin",
-		pick = "keep",
-	})
-	table.insert(items, {
-		label = "Read all changes…",
-		detail = "every commit in full, in a pane beside this one",
-		group = "What's new",
-		icon = "list",
-		pick = "read",
-	})
-	for i, commit in offer.commits do
-		if i > SHOWN_COMMITS then
-			break
-		end
-		table.insert(items, {
-			label = commit.subject,
-			detail = commit.short .. " · " .. commit.when,
-			group = "What's new",
-			icon = "sparkle",
-			pick = "read",
-		})
-	end
-	local rest = offer.behind - math.min(#offer.commits, SHOWN_COMMITS)
-	if rest > 0 then
-		table.insert(items, {
-			label = plural(rest, "earlier commit"),
-			detail = "in the pane",
-			group = "What's new",
-			icon = "list",
-			pick = "read",
-		})
-	end
-	local function answer(item: PickItem?, _err: string?, next_cx: WindowCx?)
-		busy = false
-		if item == nil or (item :: any).pick == "later" then
-			return
-		end
-		local choice = item :: any
-		local cx2 = next_cx or cx
-		if choice.pick == "update" then
-			apply(cx2, offer)
-		elseif choice.pick == "keep" then
-			keep(cx2, offer)
-		elseif choice.pick == "read" then
-			show_pane(cx2, offer)
-		end
-	end
-	local opened, err = pcall(function()
-		cx:pick({ items = items, placeholder = "Update omp Usage? Esc to decide later", icon = "download" }):next(answer)
-	end)
-	if not opened then -- no picker (no pane to show it over, say): the next check asks again
-		busy = false
-		tern.log.warn("omp-usage update prompt didn't open: " .. tostring(err))
-		if manual then
-			pcall(function()
-				cx:toast("error", "omp Usage couldn't show the update", tostring(err))
-			end)
-		end
-	end
-end
+end)
 
--- Fetches the upstream and offers what's new. `manual` reports every outcome; an automatic check stays quiet
--- unless there's an update the user hasn't kept their version over.
+-- Fetches the upstream and records what's new. `manual` (the user asked: the status button, the command, the
+-- panel) opens the update card or says it's up to date, and reports failures; an automatic check stays quiet but
+-- for a toast the first time it finds an update the user hasn't skipped.
 function M.check(cx: WindowCx, manual: boolean)
 	if busy then
 		if manual then
-			cx:toast("info", "omp Usage's update check is already under way")
+			cx:toast("info", "omp Usage is already checking or updating")
 		end
 		return
 	end
@@ -431,6 +558,7 @@ function M.check(cx: WindowCx, manual: boolean)
 				stop(cx2, "omp Usage couldn't fetch updates", reason(fetch.err))
 				return
 			end
+			kv_set(KV_LAST, os.time())
 			git(cx2, { "rev-parse", "--short", "HEAD" }, 10000, function(rev: Git, cx3: WindowCx)
 				local head = trim(rev.out)
 				git(cx3, { "rev-list", "--left-right", "--count", "HEAD...@{u}" }, 10000, function(count: Git, cx4: WindowCx)
@@ -442,8 +570,10 @@ function M.check(cx: WindowCx, manual: boolean)
 					end
 					if behind == 0 then
 						busy = false
+						set_pending(nil)
 						if manual then
-							cx4:toast("success", "omp Usage is up to date", head)
+							local version = M.version()
+							cx4:toast("success", "omp Usage is up to date", (if version then version .. " · " else "") .. head)
 						end
 						return
 					end
@@ -451,6 +581,7 @@ function M.check(cx: WindowCx, manual: boolean)
 					-- rebasing someone's own work is theirs to do.
 					if (ahead :: number) > 0 then
 						busy = false
+						set_pending(nil)
 						local title = "omp Usage has an update, but your clone has " .. plural(ahead :: number, "local commit")
 						if manual then
 							cx4:toast("info", title, "Merge it by hand: git pull, in the repo folder")
@@ -462,7 +593,7 @@ function M.check(cx: WindowCx, manual: boolean)
 					local log_args = {
 						"log",
 						"-n",
-						tostring(PANE_COMMITS),
+						tostring(CARD_COMMITS),
 						"--format=%H%x1f%h%x1f%cr%x1f%an%x1f%s%x1f%b%x1e",
 						"HEAD..@{u}",
 					}
@@ -486,43 +617,42 @@ function M.check(cx: WindowCx, manual: boolean)
 							stop(cx5, "omp Usage can't list the update's commits", reason(log.err))
 							return
 						end
-						if not manual and kv_get(KV_KEPT) == commits[1].sha then
-							busy = false -- the user kept their version over this one
-							return
-						end
-						git(cx5, { "ls-remote", "--get-url" }, 10000, function(url: Git, cx6: WindowCx)
-							prompt(cx6, {
-								head = head,
-								behind = behind :: number,
-								commits = commits,
-								web = if url.ok then web_base(trim(url.out)) else nil,
-							}, manual)
+						local newest = commits[1]
+						git(cx5, { "show", newest.sha .. ":./plugin.toml" }, 10000, function(toml: Git, cx6: WindowCx)
+							local available = if toml.ok then toml_version(toml.out) else nil
+							git(cx6, { "ls-remote", "--get-url" }, 10000, function(url: Git, cx7: WindowCx)
+								busy = false
+								local offer: Offer = {
+									head = head,
+									behind = behind :: number,
+									commits = commits,
+									web = if url.ok then web_base(trim(url.out)) else nil,
+									current = M.version(),
+									available = available,
+								}
+								if not manual and kv_get(KV_KEPT) == newest.sha then
+									set_pending(nil) -- the user skipped this one
+									return
+								end
+								local before = M.pending()
+								set_pending({ sha = newest.sha, short = newest.short, version = available })
+								if manual then
+									show_card(cx7, offer)
+								elseif before == nil or before.sha ~= newest.sha then
+									local name = update_name(available, offer.current, newest.short)
+									cx7:toast(
+										"info",
+										"omp Usage " .. name .. " is available",
+										"Update omp Usage in the status bar, or Check for Updates in its settings"
+									)
+								end
+							end)
 						end)
 					end)
 				end)
 			end)
 		end)
 	end)
-end
-
--- Sets how often the automatic check runs.
-function M.set_interval(cx: WindowCx, id: string)
-	local chosen: Interval? = nil
-	for _, interval in M.INTERVALS do
-		if interval.id == id then
-			chosen = interval
-		end
-	end
-	if chosen == nil then
-		return
-	end
-	kv_set(KV_EVERY, id)
-	kv_set(KV_AUTO, nil)
-	if chosen.hours then
-		cx:toast("info", "omp Usage checks for updates " .. string.lower(chosen.label))
-	else
-		cx:toast("info", "omp Usage won't check for updates on its own", "Check any time: omp Usage: Check for updates…")
-	end
 end
 
 -- An automatic check when the last one, in any window, is as old as the interval (less a minute's slack for a

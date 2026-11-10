@@ -2801,6 +2801,44 @@ $P .oup-btn:hover {
 	color: var(--t1);
 	box-shadow: 0 0 0 1px var(--l4);
 }
+$P .oup-ustat {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px 16px;
+	padding: 12px 14px;
+	border-radius: 10px;
+	box-shadow: 0 0 0 1px var(--l2);
+}
+$P .oup-ustat[data-ready] {
+	background-color: rgb(from var(--accent) r g b / 8%);
+	box-shadow: 0 0 0 1px rgb(from var(--accent) r g b / 40%);
+}
+$P .oup-say {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+$P .oup-utitle {
+	font: 600 13px/18px var(--sans);
+	color: var(--t1);
+}
+$P .oup-usub {
+	font: 400 11.5px/15px var(--sans);
+	color: var(--t3);
+}
+$P .oup-btn.oup-primary {
+	color: #fff;
+	background-color: var(--accent);
+	box-shadow: none;
+}
+$P .oup-btn.oup-primary:hover {
+	color: #fff;
+	background-color: rgb(from var(--accent) r g b / 85%);
+	box-shadow: none;
+}
 $P .oup-urow {
 	display: flex;
 	flex-wrap: wrap;
@@ -3140,7 +3178,23 @@ local function colors_section(settings: Settings, providers: { Provider }, rules
 	return section("colors", "Colors", "A label's color and its bars'. Point at a swatch for its name.", rows)
 end
 
--- Updates (update.luau): check now, and how often the automatic check runs.
+-- Updates (update.luau), in Tern's words: what's installed and whether an update is waiting, with Download Update
+-- (and What's New, the update card) or Check for Updates, then how often the automatic check runs.
+local function update_status(): (string, string?)
+	local version = update.version()
+	local name = "omp Usage" .. (if version then " " .. version else "")
+	local pending = update.pending()
+	if pending then
+		local next = if pending.version and pending.version ~= version then pending.version else pending.short
+		return "omp Usage " .. next .. " is available", "You have " .. (version or "an earlier version")
+	end
+	local last = update.last_checked()
+	if last == nil then
+		return name, nil
+	end
+	return name .. " is up to date", "Checked " .. span(math.max(0, os.time() - last) * 1000) .. " ago"
+end
+
 local function updates_section(): Node
 	local current = update.interval()
 	local pills: { Node } = {}
@@ -3153,9 +3207,26 @@ local function updates_section(): Node
 			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
 		}))
 	end
-	return section("updates", "Updates", "New commits on this clone's remote: you see them, then choose whether to take them.", {
+	local title, sub = update_status()
+	local say: { Node } = { ui.el("span", { class = "oup-utitle", text = title }) }
+	if sub then
+		table.insert(say, ui.el("span", { class = "oup-usub", text = sub }))
+	end
+	local buttons: { Node }
+	if update.pending() then
+		buttons = {
+			ui.el("button", { class = "oup-btn oup-primary", text = "Download Update", actions = { click = "update-download" } }),
+			ui.el("button", { class = "oup-btn", text = "What's New", actions = { click = "update-check" } }),
+		}
+	else
+		buttons = { ui.el("button", { class = "oup-btn", text = "Check for Updates", actions = { click = "update-check" } }) }
+	end
+	return section("updates", "Updates", nil, {
+		ui.el("div", { class = "oup-ustat", attrs = { ["data-ready"] = if update.pending() then true else nil } }, {
+			ui.el("span", { class = "oup-say" }, say),
+			ui.el("span", { class = "oup-acts" }, buttons),
+		}),
 		ui.el("div", { class = "oup-urow" }, {
-			ui.el("button", { class = "oup-btn", text = "Check for updates", actions = { click = "update-check" } }),
 			ui.el("span", { class = "oup-ulabel", text = "Check automatically" }),
 			ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "How often omp Usage checks for updates" } }, pills),
 		}),
@@ -3197,6 +3268,10 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		hidden_key(settings),
 		keys or "",
 		update.interval().id,
+		(function(): string
+			local title, sub = update_status()
+			return title .. "|" .. (sub or "")
+		end)(),
 	}
 	for _, provider in providers do
 		local windows: { string } = {}
@@ -3338,6 +3413,9 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 		return true
 	elseif act == "update-every" then
 		update.set_interval(cx, value)
+	elseif act == "update-download" then
+		update.download(cx)
+		return true
 	else
 		return false
 	end
@@ -3436,9 +3514,14 @@ tern.command({
 	end,
 })
 
--- `usage` in the status bar, on an agent pane: a click opens the panel.
+-- `usage` in the status bar, on an agent pane: a click opens the panel. On every pane, while an update is waiting,
+-- Update omp Usage (update.luau) first.
 local STATUS: { StatusSegment } = { { text = "usage", icon = "gauge", command = PANEL_ACTION } }
 
 tern.chrome.status(function(pane: StatusPaneInfo): { StatusSegment }?
-	return if pane.kind == "agent" then STATUS else nil
+	local pending = update.status_segment()
+	if pending == nil then
+		return if pane.kind == "agent" then STATUS else nil
+	end
+	return if pane.kind == "agent" then { pending, STATUS[1] } else { pending }
 end)
