@@ -172,7 +172,7 @@ short hash and age:
 | **Update now** | Fast-forwards the clone to the newest commit shown and reloads Tern's plugins. If the update changed the omp extension, the toast says to restart omp sessions |
 | **Keep this version** | Stays where you are. The automatic check won't ask again until there's a commit newer than the one it offered |
 | A commit | Opens it on the web (for a GitHub-style remote) |
-| Esc | Decides nothing; the next check asks again |
+| **Decide later**, or Esc | Decides nothing; the next check asks again. The automatic prompt opens on its own over whatever has focus, so this row comes first there: an Enter you meant for something else doesn't update |
 
 Check by hand at any time with **omp Usage: Check for updates…** in the palette (it also offers a version you
 kept). To stop the automatic checks, pick **Check for updates automatically** in **omp Usage: Settings…**; pick

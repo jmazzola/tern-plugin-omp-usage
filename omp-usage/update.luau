@@ -2,21 +2,25 @@
 -- Updates for this plugin's git clone (the README installs it as a clone that `tern plugin link` loads in place).
 --
 -- Every few hours, and from `omp Usage: Check for updates…`, it fetches the checked-out branch's upstream. When
--- the branch is behind, a picker lists the new commits under two choices: update (a fast-forward to the commit
+-- the branch is behind, a picker lists the new commits under the choices: update (a fast-forward to the commit
 -- the picker showed, after which Tern reloads the plugin) or keep this version (no automatic prompt again until
 -- the upstream moves past that commit). Esc decides nothing: the next check asks again. Picking a commit opens
--- it on the web when the remote is a web host.
+-- it on the web when the remote is a web host. An automatic prompt opens over whatever has focus, so its first
+-- row decides nothing too: Enter typed for something else doesn't update.
 --
--- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval and a
--- version kept in one window is kept in all of them.
+-- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows
+-- that tick together claim the check, and the claim that lands last wins) and a version kept in one window is
+-- kept in all of them.
 
 local M = {}
 
 local KV_AUTO = "omp-usage.update-auto" -- false: no automatic checks (absent: on)
 local KV_CHECKED = "omp-usage.update-checked" -- os.time() of the last automatic check
 local KV_KEPT = "omp-usage.update-kept" -- the upstream commit the user kept their version over
+local KV_CLAIM = "omp-usage.update-claim" -- the window that claimed it
 
 local FIRST_CHECK_MS = 20 * 1000 -- after a load, past Tern's own startup work
+local CLAIM_SETTLE_MS = 2000 -- long enough for every window ticking with this one to write its claim
 local TICK_MS = 60 * 60 * 1000
 local CHECK_EVERY_S = 6 * 60 * 60
 local SHOWN_COMMITS = 15
@@ -53,9 +57,11 @@ local function git(cx: WindowCx, args: { string }, timeout_ms: number, done: (Gi
 		table.insert(argv, arg)
 	end
 	local opts = { cwd = tern.plugin.dir, env = GIT_ENV, timeout_ms = timeout_ms }
-	local started, err = pcall(tern.process.run, argv, opts, function(result: ProcessResult, later: WindowCx?)
-		local failure = if result.timed_out then "git took too long" else result.stderr
-		done({ ok = result.status == 0, out = result.stdout, err = failure }, later or cx)
+	local started, err = pcall(function()
+		tern.process.run(argv, opts, function(result: ProcessResult, later: WindowCx?)
+			local failure = if result.timed_out then "git took too long" else result.stderr
+			done({ ok = result.status == 0, out = result.stdout, err = failure }, later or cx)
+		end)
 	end)
 	if not started then
 		done({ ok = false, out = "", err = "git didn't start: " .. tostring(err) }, cx)
@@ -112,26 +118,34 @@ local function apply(cx: WindowCx, offer: Offer)
 end
 
 -- Asks. `busy` stays set while the picker is open, so a later check in this window (the next tick, the
--- command) can't stack a second picker behind it.
-local function prompt(cx: WindowCx, offer: Offer)
+-- command) can't stack a second picker behind it. `manual` (the user asked) puts Update now first.
+local function prompt(cx: WindowCx, offer: Offer, manual: boolean)
 	busy = true
 	local newest = offer.commits[1]
-	local items: { PickItem } = {
-		{
-			label = "Update now",
-			detail = plural(offer.behind, "new commit") .. " · " .. offer.head .. " → " .. newest.short,
+	local items: { PickItem } = {}
+	if not manual then
+		table.insert(items, {
+			label = "Decide later",
+			detail = "ask again at the next check, like Esc",
 			group = "omp Usage update",
-			icon = "download",
-			pick = "update",
-		},
-		{
-			label = "Keep this version",
-			detail = "stay on " .. offer.head .. " until a newer update",
-			group = "omp Usage update",
-			icon = "pin",
-			pick = "keep",
-		},
-	}
+			icon = "moon",
+			pick = "later",
+		})
+	end
+	table.insert(items, {
+		label = "Update now",
+		detail = plural(offer.behind, "new commit") .. " · " .. offer.head .. " → " .. newest.short,
+		group = "omp Usage update",
+		icon = "download",
+		pick = "update",
+	})
+	table.insert(items, {
+		label = "Keep this version",
+		detail = "stay on " .. offer.head .. " until a newer update",
+		group = "omp Usage update",
+		icon = "pin",
+		pick = "keep",
+	})
 	local web = offer.web
 	for _, commit in offer.commits do
 		table.insert(items, {
@@ -157,7 +171,7 @@ local function prompt(cx: WindowCx, offer: Offer)
 	cx:pick({ items = items, placeholder = "Update omp Usage? Esc to decide later", icon = "download" })
 		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
 			busy = false
-			if item == nil then
+			if item == nil or (item :: any).pick == "later" then
 				return
 			end
 			local choice = item :: any
@@ -170,7 +184,7 @@ local function prompt(cx: WindowCx, offer: Offer)
 			elseif choice.url then
 				cx2:open(choice.url)
 			else
-				prompt(cx2, offer) -- nothing to open: back to the choice
+				prompt(cx2, offer, manual) -- nothing to open: back to the choice
 			end
 		end)
 end
@@ -198,8 +212,8 @@ function M.check(cx: WindowCx, manual: boolean)
 			stop(cx1, "omp Usage can't check for updates", reason(up.err))
 			return
 		end
-		local remote = string.match(trim(up.out), "^([^/]+)/") or "origin"
-		git(cx1, { "fetch", "--quiet", remote }, 60000, function(fetch: Git, cx2: WindowCx)
+		-- with no repository named, git fetches the current branch's remote
+		git(cx1, { "fetch", "--quiet" }, 60000, function(fetch: Git, cx2: WindowCx)
 			if not fetch.ok then
 				stop(cx2, "omp Usage couldn't fetch updates", reason(fetch.err))
 				return
@@ -236,13 +250,13 @@ function M.check(cx: WindowCx, manual: boolean)
 							busy = false -- the user kept their version over this one
 							return
 						end
-						git(cx5, { "remote", "get-url", remote }, 10000, function(url: Git, cx6: WindowCx)
+						git(cx5, { "ls-remote", "--get-url" }, 10000, function(url: Git, cx6: WindowCx)
 							prompt(cx6, {
 								head = head,
 								behind = behind :: number,
 								commits = commits,
 								web = if url.ok then web_base(trim(url.out)) else nil,
-							})
+							}, manual)
 						end)
 					end)
 				end)
@@ -261,7 +275,8 @@ function M.set_auto(cx: WindowCx, on: boolean)
 	end
 end
 
--- An automatic check when the last one, in any window, is CHECK_EVERY_S old; looked at hourly.
+-- An automatic check when the last one, in any window, is CHECK_EVERY_S old; looked at hourly. Windows started
+-- together tick together: each writes its claim, and only the window whose claim stuck checks.
 local function tick(cx: WindowCx?)
 	tern.timer(TICK_MS, tick)
 	if cx == nil or not M.auto() then
@@ -272,8 +287,14 @@ local function tick(cx: WindowCx?)
 	if type(last) == "number" and now - last < CHECK_EVERY_S then
 		return
 	end
+	local claim = cx:window_key() .. "@" .. tostring(tern.now())
 	kv_set(KV_CHECKED, now)
-	M.check(cx, false)
+	kv_set(KV_CLAIM, claim)
+	tern.timer(CLAIM_SETTLE_MS, function(later: WindowCx?)
+		if later and kv_get(KV_CLAIM) == claim then
+			M.check(later, false)
+		end
+	end)
 end
 
 if tern.runtime.os ~= "ios" then -- no processes there, so no git
