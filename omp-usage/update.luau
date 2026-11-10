@@ -238,6 +238,12 @@ function M.check(cx: WindowCx, manual: boolean)
 		-- with no repository named, git fetches the current branch's remote
 		git(cx1, { "fetch", "--quiet" }, 60000, function(fetch: Git, cx2: WindowCx)
 			if not fetch.ok then
+				if not manual then
+					-- often just offline (Tern started before the network): the next hourly tick, in any window,
+					-- tries again instead of waiting out the whole interval (a minute's slack for a timer that
+					-- fires early)
+					kv_set(KV_CHECKED, os.time() - CHECK_EVERY_S + TICK_MS // 1000 - 60)
+				end
 				stop(cx2, "omp Usage couldn't fetch updates", reason(fetch.err))
 				return
 			end
@@ -320,7 +326,8 @@ local function tick(cx: WindowCx?)
 	end
 	local now = os.time()
 	local last = kv_get(KV_CHECKED)
-	if type(last) == "number" and now - last < CHECK_EVERY_S then
+	-- a last check in the future means the clock went back: it doesn't count
+	if type(last) == "number" and last <= now and now - last < CHECK_EVERY_S then
 		return
 	end
 	local ok, key = pcall(function()

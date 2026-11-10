@@ -163,9 +163,9 @@ sessions started before the extension wrote the cache need a restart.
 ## Update
 
 The plugin checks for updates itself, at most every 6 hours: about 20 seconds after Tern loads it, and hourly
-after that, it fetches your clone's branch from its remote once 6 hours have passed since the last check. When
-there are new commits, a picker asks what to do and lists them under **What's new**, newest first, with their
-short hash and age:
+after that, it fetches your clone's branch from its remote once 6 hours have passed since the last check (or an
+hour, when the last one couldn't reach the remote). When there are new commits, a picker asks what to do and
+lists them under **What's new**, newest first, with their short hash and age:
 
 | Choice | What it does |
 | --- | --- |
