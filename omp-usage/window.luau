@@ -2584,12 +2584,13 @@ $P .oup-name {
 	font: 600 12.5px/16px var(--mono);
 	color: rgb(from var(--pa) r g b);
 }
+/* takes the room the row has, but never less than its widest window: past that the controls drop to their own
+   line instead of the shares running under the switch */
 $P .oup-sum {
 	display: flex;
-	flex: 1 1 0;
+	flex: 1 0 auto;
 	flex-wrap: wrap;
 	gap: 2px;
-	min-width: 0;
 	white-space: nowrap;
 	font: 500 10.5px/14px var(--mono);
 	font-variant-numeric: tabular-nums;

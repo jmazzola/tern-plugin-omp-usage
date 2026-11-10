@@ -56,6 +56,7 @@ local TICK_MS = 60 * 60 * 1000 -- how often each window looks whether a check is
 local BADGE_POLL_MS = 10 * 1000 -- how soon a window shows (or drops) the status button another window decided
 local CARD_COMMITS = 100 -- commits the update card shows in full
 local BODY_MAX = 4000 -- characters of one commit's message body the card shows
+local RELOAD_FALLBACK_MS = 5000 -- after an update, how long Tern's folder watch gets to reload the plugin
 -- No credential prompts or windows: a remote that needs them fails the check instead.
 local GIT_ENV = { GIT_TERMINAL_PROMPT = "0", GCM_INTERACTIVE = "never" }
 local UPDATE_ACTION = "plugin." .. tern.plugin.id .. ".update"
@@ -232,7 +233,7 @@ function M.status_segment(): StatusSegment?
 	if badge == nil then
 		return nil
 	end
-	return { text = "Update omp Usage", icon = "download", tone = "accent", command = UPDATE_ACTION }
+	return { text = "Update omp Usage", icon = "download", command = UPDATE_ACTION } -- bar.css makes it a pill
 end
 
 local function refresh_badge()
@@ -276,8 +277,15 @@ local function apply(cx: WindowCx, pending: Pending)
 			set_pending(nil)
 			local sub = if extension then "The omp extension changed: restart omp sessions" else nil
 			cx3:toast("success", "omp Usage updated to " .. name, sub)
-			pcall(function()
-				cx3:command("reload_plugins") -- Tern's watch of the clone reloads it too
+			-- Tern watches a linked clone and reloads this window's plugins when the merge changes it. Only if that
+			-- didn't happen (this VM, which a reload replaces, is still here) ask for Reload plugins, which also
+			-- empties every plugin canvas left open (the settings panel) until it's opened again.
+			tern.timer(RELOAD_FALLBACK_MS, function(later: WindowCx?)
+				if later then
+					pcall(function()
+						later:command("reload_plugins")
+					end)
+				end
 			end)
 		end)
 	end)
@@ -291,9 +299,11 @@ local CARD_ABOUT = "An update to the omp Usage plugin: the version that's availa
 	.. "commit. Download Update fast-forwards the plugin's git clone and reloads Tern's plugins; Skip This Version "
 	.. "hides this update until a newer one; Not Now closes this panel. Nothing changes until one of them is clicked."
 local CARD_ROLE = "omp-usage.update"
+local CARD_DOCK_ROLE = "omp-usage.update-dock"
 local CARD_SHEET = "update-card"
 local C = "[data-role='" .. CARD_ROLE .. "']"
-local CARD_CSS = string.gsub(
+local D = "[data-role='" .. CARD_DOCK_ROLE .. "']"
+local CARD_CSS = (string.gsub(string.gsub(
 	[==[
 $C {
 	display: flex;
@@ -342,10 +352,16 @@ $C .ouu-label {
 	text-transform: uppercase;
 	color: var(--t2);
 }
+/* the buttons wrap in a narrow pane rather than run off its edge */
+$D {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
 ]==],
 	"%$C",
 	C
-)
+), "%$D", D))
 
 local function md_escape(text: string): string
 	return (string.gsub(text, "([\\`*_%[%]<>|#])", "\\%1"))
@@ -429,7 +445,7 @@ end
 
 local function card_dock(): Node
 	local ui = tern.ui
-	return ui.row({
+	return ui.el("div", { role = CARD_DOCK_ROLE }, {
 		ui.button("Download Update", { icon = "download", variant = "primary", actions = { click = "download" } }),
 		ui.button("Skip This Version", { actions = { click = "skip" } }),
 		ui.button("Not Now", { variant = "quiet", actions = { click = "later" } }),
@@ -470,7 +486,8 @@ local function show_card(cx: WindowCx, offer: Offer)
 		return
 	end
 	local ok, opened, err = pcall(function()
-		return cx.canvas:open({ title = CARD_TITLE, about = CARD_ABOUT, view = view, dock = dock, how = "beside" })
+		-- a glimpse: over the whole tab in no split, so nothing it covers gets squeezed, until a click outside it
+		return cx.canvas:open({ title = CARD_TITLE, about = CARD_ABOUT, view = view, dock = dock, how = "glimpse" })
 	end)
 	if not ok or opened == nil then
 		cx:toast("error", "omp Usage couldn't show the update", tostring(if ok then err else opened))
