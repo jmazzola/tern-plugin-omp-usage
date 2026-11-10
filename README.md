@@ -26,8 +26,8 @@ expires, listed under the window it resets.
   marked `+NF` on the line and labeled in the card. Credits queued behind another reset are included in the count.
 - Change what it shows, the providers' order, which of each provider's windows show, and their colors in a
   settings panel: Ctrl+Alt+U, or **usage** in the status bar.
-- Keeps itself up to date: when your clone's remote has new commits, a picker lists them and asks whether to
-  update or keep your version (see [Update](#update)).
+- Keeps itself up to date the way Tern does: when your clone's remote has a new version, an **Update omp Usage**
+  button appears in the status line, and an update card shows what's new and downloads it (see [Update](#update)).
 
 | Part | What it does |
 | --- | --- |
@@ -120,7 +120,7 @@ that's open.
 | Show | **Current model**: the focused agent's provider (the default); while you view a subagent's transcript, its model's. **All providers**: every provider with limits, one after another; with several, the line drops the countdowns and the word `left` (the card has them). **Selected providers**: the ones switched on under Providers |
 | Providers | A row per provider, in the line's order. Its windows are the ones your accounts report (e.g. Claude's `7D` and `FABLE 7D`): click one to hide it from the line and the card, everywhere and in every mode, and again to show it (a hidden one fades, its share struck through). A provider with every window hidden drops off the line. Its switch puts it in or takes it out of Selected providers, and shows those; its arrows move it one place, **top** moves it first |
 | Colors | Per provider: its preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), **Custom…** (one or two hex colors, like `#d97757` or `#9aa7b4, #5b8def`) and **Reset**. Point at a swatch for its name |
-| Updates | **Check for updates** checks now, and **Check automatically** picks how often the plugin checks on its own: Hourly, Every 6 hours (the default), Daily, Weekly or Off (see [Update](#update)) |
+| Updates | Where things stand, in Tern's words ("omp Usage 0.3.0 is up to date", "omp Usage 0.4.0 is available") with **Check for Updates**, or **Download Update** and **What's New** when an update is waiting. **Check automatically** picks how often the plugin checks on its own: Hourly, Every 6 hours (the default), Daily, Weekly or Off (see [Update](#update)) |
 
 ![The settings panel: a line preview, the Show choices, providers with their window toggles (Claude's 5H hidden and struck through), switches and move buttons, and color swatches](docs/images/settings-panel.png)
 
@@ -131,7 +131,7 @@ menus, so the order is set with buttons.
 panel…, Show, Choose providers… (the list stays open so you can check several; Esc closes it), Reorder
 providers… (pick a provider, then Move up, Move down, Move to top or Move to bottom), Provider colors… and
 Provider windows… (pick a provider, then check the windows to show; Esc closes it). Its Updates section has
-Check for updates… and Check automatically… (how often, as in the panel; see [Update](#update)).
+Check for updates… (the update card, or "up to date") and Check automatically… (how often, as in the panel).
 
 The presets: Claude clay, Codex graphite to blue, OpenAI green, Kimi green, Gemini blue to white, Antigravity
 blue, MiniMax red to pink, Go cyan, Qwen purple, Devin teal. Other providers use the theme's accent. Whatever
@@ -167,31 +167,30 @@ sessions started before the extension wrote the cache need a restart.
 
 The plugin checks for updates itself, every 6 hours unless you choose otherwise: about 20 seconds after Tern
 loads it, and hourly after that, it fetches your clone's branch from its remote once the interval has passed since
-the last check (or an hour, when the last one couldn't reach the remote). When there are new commits, a picker asks
-what to do and lists them under **What's new**, newest first, one line each (the newest 15, then a row for any
-earlier ones):
+the last check (or an hour, when the last one couldn't reach the remote). Like Tern's own updates, it doesn't
+interrupt you: when there's a new version, a toast says so once, and an **Update omp Usage** pill appears in the
+status line of every window (with the status bar on) until you download or skip it.
 
-![The update prompt: Decide later, Update now (7 new commits, 712e85f to ea662f9) and Keep this version, then Read all changes… and the new commits under What's new](docs/images/update-prompt.png)
+![The Update omp Usage pill at the right of the status line, and the settings panel's Updates section: omp Usage 0.3.0 is available, You have 0.2.0, Download Update and What's New, then Check automatically](docs/images/update-status.png)
 
-| Choice | What it does |
+Click it, or run **omp Usage: Check for updates…**, or **Check for Updates** in the settings panel, and the update
+card opens over the tab: the version that's available and the one you have (from `plugin.toml` on each side, or
+commit hashes when the version didn't change), and every new commit in full underneath, with its hash, age, author
+and a link to it on the web (for a GitHub-style remote).
+
+![The update card: omp Usage 0.3.0 is available, You have 0.2.0, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
+
+| Button | What it does |
 | --- | --- |
-| **Decide later**, or Esc | Decides nothing; the next check asks again. The automatic prompt opens on its own over whatever has focus, so this row comes first there: an Enter you meant for something else doesn't update. Checking by hand puts **Update now** first instead |
-| **Update now** | Fast-forwards the clone to the newest commit shown and reloads Tern's plugins. If the update changed the omp extension, the toast says to restart omp sessions |
-| **Keep this version** | Stays where you are. The automatic check won't ask again until there's a commit newer than the one it offered |
-| **Read all changes…**, or any commit | Opens the what's-new pane beside you (below) |
+| **Download Update** | Fast-forwards the clone to the newest commit and Tern reloads the plugin. If the update changed the omp extension, the toast says to restart omp sessions |
+| **Skip This Version** | Stays where you are; the pill and toast stay away until there's a newer version |
+| **Not Now**, Esc, or a click outside | Closes the card; the pill stays |
 
-A one-line row cuts off a long commit subject and has no room for the message, so **Read all changes…** opens a
-pane with every commit in full: its whole subject and message, its hash, age and author, and a link to it on the
-web (for a GitHub-style remote). The newest 100 show there, then a link to compare the rest. **Update now**,
-**Keep this version** and **Close** sit in its bottom bar and do what the picker's rows do; a pane left open across
-a plugin reload checks again when you click one, rather than act on what it showed.
-
-![The what's-new pane: each commit's full subject, hash, age, author and web link, a commit message with a bulleted list, and Update now, Keep this version and Close in the bottom bar](docs/images/whats-new-pane.png)
-
-Check by hand at any time with **Check for updates** in the settings panel or **omp Usage: Check for updates…** in
-the palette (either also offers a version you kept). To check more or less often, or never, pick under **Check
-automatically** in the panel's Updates section, or **Check automatically…** in **omp Usage: Settings…**: Hourly,
-Every 6 hours, Daily, Weekly or Off. Every Tern window shares these choices, and one window checks per interval.
+Checking by hand (**Check for Updates** in the settings panel, or **omp Usage: Check for updates…**) shows the card
+even for a version you skipped, or says omp Usage is up to date. To check more or less often, or never, pick under
+**Check automatically** in the panel's Updates section, or **Check automatically…** in **omp Usage: Settings…**:
+Hourly, Every 6 hours, Daily, Weekly or Off. Every Tern window shares these choices, and one window checks per
+interval.
 
 The update is a fast-forward of the branch you have checked out, so it needs that branch to track a remote (as
 `main` does after `git clone`) and git on `PATH`. It never merges or rebases your work: when the clone has local
