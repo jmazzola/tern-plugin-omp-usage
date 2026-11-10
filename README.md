@@ -2,12 +2,12 @@
 
 Your omp usage limits, shown just above the omp composer's context bar in [Tern](https://stencil.so/tern):
 
-![The usage line above the omp composer: Claude's 5-hour and 7-day windows with bars, share left and reset countdowns](docs/images/line-current.png)
+![The usage line above the omp composer: Claude's 5-hour, 7-day and Fable 7-day windows with bars, share left, reset countdowns, a saved reset (+1) and two Fable resets (+2F)](docs/images/line-current.png)
 
 Hover the line for the details: every window's meter, reset countdown and clock time, and when each saved reset
-expires.
+expires, listed under the window it resets.
 
-![The hover card: Claude's 5-hour and weekly windows with meters, reset times and a saved reset's expiry date](docs/images/card-current.png)
+![The hover card: Claude's 5-hour, weekly and Fable weekly windows with meters and reset times, a saved reset under the weekly window and two Fable resets under the Fable window](docs/images/card-current.png)
 
 - Shows the limits for the active model's provider (any provider `omp usage` reports: Claude, Codex, Kimi,
   Gemini, Muse Code, …), and switches within about 2 s when you change models (Alt+P). While you view a subagent's
@@ -32,7 +32,7 @@ expires.
 | `omp/extensions/usage-remaining.js` | omp extension. Fetches `omp usage --json`, sets the line as an omp extension status, and writes every model's and provider's line to a cache file. |
 | `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses it redraws from the bar (the rest of omp's status line stays), keeps the session cost in the bar, and adds the settings panel. |
 
-Tested with Tern 0.9.9 and omp 18.15.0 on Windows.
+Tested with Tern 0.9.14 and omp 18.18.6 on Windows.
 
 ## Requirements
 
@@ -119,7 +119,7 @@ that's open.
 | Providers | A row per provider, in the line's order. Its windows are the ones your accounts report (e.g. Claude's `7D` and `FABLE 7D`): click one to hide it from the line and the card, everywhere and in every mode, and again to show it (a hidden one fades, its share struck through). A provider with every window hidden drops off the line. Its switch puts it in or takes it out of Selected providers, and shows those; its arrows move it one place, **top** moves it first |
 | Colors | Per provider: its preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), **Custom…** (one or two hex colors, like `#d97757` or `#9aa7b4, #5b8def`) and **Reset**. Point at a swatch for its name |
 
-![The settings panel: a line preview, the Show choices, providers with switches and move buttons, and color swatches](docs/images/settings-panel.png)
+![The settings panel: a line preview, the Show choices, providers with their window toggles (Claude's 5H hidden and struck through), switches and move buttons, and color swatches](docs/images/settings-panel.png)
 
 Changes apply at once and every Tern window shares them. Tern plugins can't take drag and drop or right-click
 menus, so the order is set with buttons.
@@ -138,13 +138,14 @@ a provider's colors, a window at 25% or less turns amber and one at 10% or less 
 **Current model** (the default) shows the focused agent's provider, as at the top of this page.
 
 **All providers** puts every provider with limits on the line, in your order. With several, the line drops the
-countdowns and the word `left`; the card has them, grouped by provider:
+countdowns and the word `left`; the card has them, grouped by provider. Muse Code's 5-hour window, at 18%, has
+turned amber:
 
-![All providers: Claude and Codex on one line, with a card listing both providers' windows and saved resets](docs/images/card-all.png)
+![All providers: Claude, Codex and Muse on one line, with a card listing each provider's windows and saved resets](docs/images/card-all.png)
 
-**Selected providers** shows only the ones switched on, here Codex while an Opus model is in use:
+**Selected providers** shows only the ones switched on, here Codex and Muse while an Opus model is in use:
 
-![Selected providers: only Codex's weekly window on the line](docs/images/line-selected.png)
+![Selected providers: Codex's weekly window and Muse's 5-hour window on the line](docs/images/line-selected.png)
 
 **Colors**: Claude on the Sunset alternative and Codex on a custom `#22d3ee, #a78bfa`:
 
