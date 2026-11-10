@@ -26,11 +26,13 @@ expires, listed under the window it resets.
   marked `+NF` on the line and labeled in the card. Credits queued behind another reset are included in the count.
 - Change what it shows, the providers' order, which of each provider's windows show, and their colors in a
   settings panel: Ctrl+Alt+U, or **usage** in the status bar.
+- Keeps itself up to date: when your clone's remote has new commits, a picker lists them and asks whether to
+  update or keep your version (see [Update](#update)).
 
 | Part | What it does |
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension. Fetches `omp usage --json`, sets the line as an omp extension status, and writes every model's and provider's line to a cache file. |
-| `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses it redraws from the bar (the rest of omp's status line stays), keeps the session cost in the bar, and adds the settings panel. |
+| `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses it redraws from the bar (the rest of omp's status line stays), keeps the session cost in the bar, adds the settings panel, and checks for updates. |
 
 Tested with Tern 0.9.14 and omp 18.18.6 on Windows.
 
@@ -165,14 +167,16 @@ sessions started before the extension wrote the cache need a restart.
 The plugin checks for updates itself, at most every 6 hours: about 20 seconds after Tern loads it, and hourly
 after that, it fetches your clone's branch from its remote once 6 hours have passed since the last check (or an
 hour, when the last one couldn't reach the remote). When there are new commits, a picker asks what to do and
-lists them under **What's new**, newest first, with their short hash and age:
+lists them under **What's new**, newest first (the newest 15, then a row for any earlier ones; the list scrolls):
+
+![The update prompt: Decide later, Update now (5 new commits, 712e85f to bee1ccc) and Keep this version, then the new commits under What's new](docs/images/update-prompt.png)
 
 | Choice | What it does |
 | --- | --- |
+| **Decide later**, or Esc | Decides nothing; the next check asks again. The automatic prompt opens on its own over whatever has focus, so this row comes first there: an Enter you meant for something else doesn't update. Checking by hand puts **Update now** first instead |
 | **Update now** | Fast-forwards the clone to the newest commit shown and reloads Tern's plugins. If the update changed the omp extension, the toast says to restart omp sessions |
 | **Keep this version** | Stays where you are. The automatic check won't ask again until there's a commit newer than the one it offered |
 | A commit | Opens it on the web (for a GitHub-style remote) |
-| **Decide later**, or Esc | Decides nothing; the next check asks again. The automatic prompt opens on its own over whatever has focus, so this row comes first there: an Enter you meant for something else doesn't update |
 
 Check by hand at any time with **omp Usage: Check for updates…** in the palette (it also offers a version you
 kept). To stop the automatic checks, pick **Check for updates automatically** in **omp Usage: Settings…**; pick
