@@ -1,240 +1,145 @@
 # tern-plugin-omp-usage
 
-Your omp usage limits, shown just above the omp composer's context bar in [Tern](https://stencil.so/tern):
+Your omp usage limits, just above the omp composer's context bar in [Tern](https://stencil.so/tern):
 
 ![The usage line above the omp composer: Claude's 5-hour, 7-day and Fable 7-day windows with bars, share left, reset countdowns, a saved reset (+1) and two Fable resets (+2F)](docs/images/line-current.png)
 
-Hover the line for the details: every window's meter, reset countdown and clock time, and when each saved reset
-expires, listed under the window it resets.
+Hover it for each window's meter, reset time and saved resets:
 
 ![The hover card: Claude's 5-hour, weekly and Fable weekly windows with meters and reset times, a saved reset under the weekly window and two Fable resets under the Fable window](docs/images/card-current.png)
 
-- Shows the limits for the active model's provider (any provider `omp usage` reports: Claude, Codex, Kimi,
-  Gemini, Muse Code, …), and switches within about 2 s when you change models (Alt+P). While you view a subagent's
-  transcript, it shows the limits for that subagent's model. Providers and windows come from omp's report, so a
-  new provider or an unfamiliar window (labeled by its length, e.g. `2h`) shows without changes here. A separate
-  meter on the plan, such as Claude's Fable weekly limit, shows beside the general window as its own (`FABLE 7D`)
-  whichever model is active; a limit for one model only, such as Codex Spark's, shows only while that model is.
-- Or shows every provider at once, or the ones you choose, in the order you set (see [Settings](#settings)).
-- Each window gets a slim bar filled to the share left, with a lit tip, in its provider's colors: amber at 25%
-  or less, red at 10% or less. In a narrow pane, windows that don't fit drop off whole.
-- When a share changes, the line prints again and a comet runs each changed bar to its new level: in the
-  provider's color when quota drops, green when it comes back.
-- Hover the line to lift it into a glass capsule; after a beat a card opens above it with each window, its
-  meter, reset countdown and clock time, the expiry date of each saved reset, and the settings shortcut.
-  Saved resets appear directly beneath their applicable usage window in the card; Claude's Fable reset count is
-  marked `+NF` on the line and labeled in the card. Credits queued behind another reset are included in the count.
-- Change what it shows, the providers' order, which of each provider's windows show, and their colors in a
-  settings panel: Ctrl+Alt+U, or **usage** in the status bar.
-- Keeps itself up to date, the way Tern does: when a new version is out, an **Update omp Usage** pill appears in the
-  status line, and one click shows what's new and installs it. Nothing pops up over your work (see [Update](#update)).
+- **Follows your model.** Shows the active model's provider (anything `omp usage` reports: Claude, Codex, Kimi,
+  Gemini, Muse Code, …) and switches within ~2 s of Alt+P, or to a subagent's model while you view its transcript.
+  New providers and windows show up without changes here.
+- **Or every provider**, or the ones you pick, in your order.
+- **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
+  share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
+- **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
+- **Updates itself** like Tern does: an **Update omp Usage** pill in the status line, one click to see what's new
+  and install it. Nothing pops up over your work.
 
 ![The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
 
 | Part | What it does |
 | --- | --- |
-| `omp/extensions/usage-remaining.js` | omp extension. Fetches `omp usage --json`, sets the line as an omp extension status, and writes every model's and provider's line to a cache file. |
-| `omp-usage/` | Tern plugin. Reads the focused omp pane's extension statuses and the cache, draws the line above the context bar, hides the statuses it redraws from the bar (the rest of omp's status line stays), keeps the session cost in the bar, adds the settings panel, and checks for updates. |
+| `omp/extensions/usage-remaining.js` | omp extension: fetches `omp usage --json`, sets the line as an extension status, and caches every model's and provider's line. |
+| `omp-usage/` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. |
 
 Tested with Tern 0.9.14 and omp 18.18.6 on Windows.
 
-## Requirements
-
-- Tern, with plugins on (Preferences › Plugins).
-- omp, signed in to an account with usage limits (Anthropic, OpenAI Codex, …). `omp usage` should list them.
-
 ## Install
 
-Run the commands from the folder you cloned into. In paths, prefer forward slashes, even on Windows: they work
-in every shell, while unquoted backslashes break in bash-style shells.
+You need Tern with plugins on (Preferences › Plugins) and omp signed in to an account with limits (`omp usage`
+should list them). Use forward slashes in paths, even on Windows.
 
-### 1. Get the repo
+1. **Clone** to a folder you'll keep; Tern and omp load the files from there:
 
-Clone it to a folder you'll keep. Tern and omp load the files from there.
+   ```sh
+   git clone https://github.com/jmazzola/tern-plugin-omp-usage.git
+   cd tern-plugin-omp-usage
+   ```
 
-```sh
-git clone https://github.com/jmazzola/tern-plugin-omp-usage.git
-cd tern-plugin-omp-usage
-```
+2. **Link the plugin.** `tern plugin list` should show `omp-usage … ready`; Tern loads it on every launch.
 
-### 2. Link the Tern plugin
+   ```sh
+   tern plugin link ./omp-usage
+   tern plugin list
+   ```
 
-```sh
-tern plugin link ./omp-usage
-tern plugin list
-```
+3. **Load the extension** in `~/.omp/agent/config.yml`, with your clone's path:
 
-`tern plugin list` should show `omp-usage … ready`. The link persists: Tern loads the plugin on every launch.
+   ```yaml
+   extensions:
+     - C:/Users/you/tern-plugin-omp-usage/omp/extensions/usage-remaining.js
+   ```
 
-### 3. Load the omp extension
+4. **Show extension statuses** in omp's bar, where the plugin reads the line. Either:
 
-Add the extension's full path to `~/.omp/agent/config.yml`, or add the line to your existing `extensions:` list.
-Replace `/path/to/tern-plugin-omp-usage` with where you cloned it (e.g. `C:/Users/you/tern-plugin-omp-usage`):
+   ```yaml
+   statusLine:
+     showHookStatus: true
+   ```
 
-```yaml
-extensions:
-  - /path/to/tern-plugin-omp-usage/omp/extensions/usage-remaining.js
-```
+   or, with `preset: custom`, add `status` to `leftSegments`.
 
-### 4. Let omp show extension statuses
-
-The extension's line reaches the composer bar as an extension status, where the plugin reads it (and hides it
-from the focused pane's bar; the rest of your status line, such as branch and git changes, stays, and the session
-cost is kept even when a long status line, like the `full` preset, fills the bar). Either keep `showHookStatus`
-on, which works with any status line preset:
-
-```yaml
-statusLine:
-  showHookStatus: true
-```
-
-or, with `preset: custom`, list the `status` segment:
-
-```yaml
-statusLine:
-  leftSegments:
-    - status   # alongside your other segments
-```
-
-### 5. Restart omp
-
-omp loads extensions when a session starts. Open a new omp pane, or restart open ones.
-
-## Check it works
-
-Click into an omp pane. Within a few seconds the usage line appears above `1% ──── 1M`.
-
-- The line shows on the focused omp pane only.
-- A model whose provider has no usage report shows no line.
+5. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` within seconds.
 
 ## Settings
 
-Open the settings panel in any of these ways. It opens beside the focused pane; opening it again goes to the one
-that's open.
-
-- Press **Ctrl+Alt+U**. To use another chord, bind `plugin.omp-usage.panel` in Tern's keybinds.
-- Click **usage** in the status bar while an omp pane has focus (with the status bar on).
-- Run **omp Usage: Settings panel** from the command palette.
+Open the panel with **Ctrl+Alt+U** (rebind `plugin.omp-usage.panel`), **usage** in the status bar, or **omp Usage:
+Settings panel** in the palette. Changes apply at once, in every window.
 
 | Section | What it does |
 | --- | --- |
-| Line | Previews the line as the composer shows it, for the last omp pane you used |
-| Show | **Current model**: the focused agent's provider (the default); while you view a subagent's transcript, its model's. **All providers**: every provider with limits, one after another; with several, the line drops the countdowns and the word `left` (the card has them). **Selected providers**: the ones switched on under Providers |
-| Providers | A row per provider, in the line's order. Its windows are the ones your accounts report (e.g. Claude's `7D` and `FABLE 7D`): click one to hide it from the line and the card, everywhere and in every mode, and again to show it (a hidden one fades, its share struck through). A provider with every window hidden drops off the line. Its switch puts it in or takes it out of Selected providers, and shows those; its arrows move it one place, **top** moves it first |
-| Colors | Per provider: its preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), **Custom…** (one or two hex colors, like `#d97757` or `#9aa7b4, #5b8def`) and **Reset**. Point at a swatch for its name |
-| Updates | Where things stand, in Tern's words ("omp Usage 0.3.0 is up to date", "omp Usage 0.4.0 is available") with **Check for Updates**, or **Download Update** and **What's New** when an update is waiting. **Check automatically** picks how often the plugin checks on its own: Hourly, Every 6 hours (the default), Daily, Weekly or Off (see [Update](#update)) |
+| Line | Previews the line for the last omp pane you used |
+| Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers** |
+| Providers | Click a window to hide or show it everywhere; the switch adds the provider to Selected; arrows and **top** reorder |
+| Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`) |
+| Updates | Status, **Check for Updates** or **Download Update**, and how often to check (see [Update](#update)) |
 
 ![The settings panel: a line preview, the Show choices, providers with their window toggles (Claude's 5H hidden and struck through), switches and move buttons, and color swatches](docs/images/settings-panel.png)
 
-Changes apply at once and every Tern window shares them. Tern plugins can't take drag and drop or right-click
-menus, so the order is set with buttons.
+**omp Usage: Settings…** in the palette offers the same as keyboard menus.
 
-**omp Usage: Settings…** in the palette offers the same settings as menus, for the keyboard: Open settings
-panel…, Show, Choose providers… (the list stays open so you can check several; Esc closes it), Reorder
-providers… (pick a provider, then Move up, Move down, Move to top or Move to bottom), Provider colors… and
-Provider windows… (pick a provider, then check the windows to show; Esc closes it). Its Updates section has
-Check for updates… (the update card, or "up to date") and Check automatically… (how often, as in the panel).
-
-The presets: Claude clay, Codex graphite to blue, OpenAI green, Kimi green, Gemini blue to white, Antigravity
-blue, MiniMax red to pink, Go cyan, Qwen purple, Devin teal. Other providers use the theme's accent. Whatever
-a provider's colors, a window at 25% or less turns amber and one at 10% or less red.
-
-### What each choice looks like
-
-**Current model** (the default) shows the focused agent's provider, as at the top of this page.
-
-**All providers** puts every provider with limits on the line, in your order. With several, the line drops the
-countdowns and the word `left`; the card has them, grouped by provider. Muse Code's 5-hour window, at 18%, has
-turned amber:
+**All providers**, one after another; Muse Code's 5-hour window has turned amber:
 
 ![All providers: Claude, Codex and Muse on one line, with a card listing each provider's windows and saved resets](docs/images/card-all.png)
 
-**Selected providers** shows only the ones switched on, here Codex and Muse while an Opus model is in use:
+**Selected providers**, here Codex and Muse while an Opus model is in use:
 
 ![Selected providers: Codex's weekly window and Muse's 5-hour window on the line](docs/images/line-selected.png)
 
-**Colors**: Claude on the Sunset alternative and Codex on a custom `#22d3ee, #a78bfa`:
+**Colors**: Claude on Sunset, Codex on a custom `#22d3ee, #a78bfa`:
 
 ![Custom colors: Claude in a red-orange gradient and Codex in cyan to violet, on the line and in the card](docs/images/card-colors.png)
 
-### The usage cache
-
-After every fetch the extension writes `~/.omp/cache/usage-remaining.json`: each model's line, keyed by the name
-omp's model chip shows, each provider's plan-wide line, and the expiry dates of saved resets. The plugin uses it
-for a viewed subagent's model, for All and Selected providers, and for the reset dates in the card. It ignores
-a cache older than 10 minutes; without a fresh one, every choice falls back to the current model's line. omp
-sessions started before the extension wrote the cache need a restart.
+The extension caches every line in `~/.omp/cache/usage-remaining.json`. All and Selected providers, subagent
+models and the card's reset dates read it; a cache older than 10 minutes is ignored.
 
 ## Update
 
-The plugin checks for updates itself, every 6 hours unless you choose otherwise: about 20 seconds after Tern
-loads it, and hourly after that, it fetches your clone's branch from its remote once the interval has passed since
-the last check (or an hour, when the last one couldn't reach the remote). Like Tern's own updates, it doesn't
-interrupt you: when there's a new version, a toast says so once, and an **Update omp Usage** pill appears in the
-status line of every window (with the status bar on) until you download or skip it.
-
-Only commits that change the plugin (the `omp-usage` folder) or the omp extension (the `omp` folder) count as an
-update. A push of just the README or its pictures doesn't light up the pill; those commits come along with the next
-real update, and the card says how many there are.
+The plugin checks your clone's remote every 6 hours (Hourly, Daily, Weekly or Off in the panel). When there's a new
+version, a toast says so once and an **Update omp Usage** pill sits in the status line until you deal with it:
 
 ![The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line](docs/images/update-status.png)
 
-Click it, or run **omp Usage: Check for updates…**, or **Check for Updates** in the settings panel, and the update
-card opens over the tab: the version that's available and the one you have (from `plugin.toml` on each side, or
-commit hashes when the version didn't change), and every commit that changes the plugin in full underneath, with
-its hash, age, author and a link to it on the web (for a GitHub-style remote).
-
-![The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
+Click it (or **Check for Updates**) for the update card shown at the top: the version available, the one you have,
+and every new commit in full.
 
 | Button | What it does |
 | --- | --- |
-| **Download Update** | Fast-forwards the clone to the remote's newest commit (README commits included) and Tern reloads the plugin. If the update changed the omp extension, the toast says to restart omp sessions |
-| **Skip This Version** | Stays where you are; the pill and toast stay away until a newer commit changes the plugin |
-| **Not Now**, Esc, or a click outside | Closes the card; the pill stays |
+| **Download Update** | Fast-forwards the clone and reloads the plugin; the toast says if omp sessions need a restart |
+| **Skip This Version** | Hides the pill until a newer plugin change |
+| **Not Now** / Esc | Closes the card; the pill stays |
 
-While the update lands, any open settings panel, in any window, steps aside for a moment rather than flash half
-drawn as Tern reloads the plugin, and a toast confirms the new version:
+Open settings panels step aside while the update lands, so nothing flashes half-drawn:
 
 ![Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0](docs/images/update-landing.png)
 
-Checking by hand (**Check for Updates** in the settings panel, or **omp Usage: Check for updates…**) shows the card
-even for a version you skipped, or says omp Usage is up to date. To check more or less often, or never, pick under
-**Check automatically** in the panel's Updates section, or **Check automatically…** in **omp Usage: Settings…**:
-Hourly, Every 6 hours, Daily, Weekly or Off. Every Tern window shares these choices, and one window checks per
-interval.
+- Only commits that change `omp-usage/` or `omp/` count; README-only pushes don't light the pill and come along with
+  the next real update.
+- It never merges or rebases your work. With local commits, or edits in the way, update by hand:
+  `git pull`, then `tern plugin reload`.
 
-The update is a fast-forward of the branch you have checked out, so it needs that branch to track a remote (as
-`main` does after `git clone`) and git on `PATH`. It never merges or rebases your work: when the clone has local
-commits the remote lacks, it offers no update (Check for updates… says so), and when uncommitted edits block the
-fast-forward, the toast shows git's reason. Either way, update by hand from the repo folder:
-
-```sh
-git pull
-tern plugin reload
-```
-
-Then restart omp sessions if the extension changed.
-
-## Turn it off or uninstall
+## Turn it off
 
 | To | Do |
 | --- | --- |
-| Turn the Tern plugin off | `tern plugin unlink omp-usage`, or switch it off in Preferences › Plugins |
-| Turn it back on | `tern plugin link ./omp-usage`, from the repo folder |
+| Turn the plugin off | `tern plugin unlink omp-usage`, or Preferences › Plugins |
+| Turn it back on | `tern plugin link ./omp-usage` from the repo folder |
 | Remove the extension | Delete its line from `~/.omp/agent/config.yml`, then restart omp |
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| `tern plugin list` doesn't show `ready` | It prints the error. Tern's log on Windows: `%LOCALAPPDATA%\Tern\Logs\tern.log` |
-| No line above the context bar | The pane has focus and is omp; the model's provider has limits (`omp usage` lists them); omp was restarted after step 3; extension statuses are on (step 4) |
-| All or Selected providers shows only the current model | The cache is missing or older than 10 minutes: restart omp sessions started before the extension was updated |
-| Ctrl+Alt+U doesn't open the panel | Another binding or your keyboard layout (where Ctrl+Alt types characters) took it. The hover card's last row shows the chord in effect; bind `plugin.omp-usage.panel` to another in Tern's keybinds |
-| Line stopped after an omp or Tern update | omp may have renamed what the plugin reads. Ask omp to fix `omp-usage` |
-| No Update omp Usage pill when an update is out | The pill lives in Tern's status line: turn the status bar on, or use the settings panel's Updates section, which says the same. Automatic checks might be **Off** (Updates › Check automatically) |
-| `omp Usage can't check for updates` | The repo folder must be a git clone whose branch tracks a remote, with git on `PATH`. **omp Usage: Check for updates…** shows git's reason |
-| Edits to `window.luau` don't show | Run `tern plugin reload` |
+| `tern plugin list` isn't `ready` | It prints the error; Tern's log is `%LOCALAPPDATA%\Tern\Logs\tern.log` |
+| No line | Focused pane is omp; its provider has limits; omp restarted after install; extension statuses on (step 4) |
+| All/Selected show only the current model | The cache is stale: restart omp sessions |
+| Ctrl+Alt+U does nothing | Another binding took it; bind `plugin.omp-usage.panel` to another chord |
+| Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |
+| No update pill | Turn Tern's status bar on, or use the panel's Updates section; checks may be Off |
+| `omp Usage can't check for updates` | Needs a git clone tracking a remote, and git on `PATH`; the toast shows git's reason |
+| Edits to `window.luau` don't show | `tern plugin reload` |
 
-Don't edit Tern's `settings.json` from PowerShell. It saves the file with a BOM, and Tern falls back to its
-default settings until the file is restored.
+Don't edit Tern's `settings.json` from PowerShell: it adds a BOM and Tern falls back to defaults.
