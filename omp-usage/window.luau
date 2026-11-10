@@ -3303,6 +3303,8 @@ local function panel_parts(state: PanelState): (Node, Node, string)
 end
 
 local panel_sig: string? = nil
+-- While an update lands (update.luau), the panel shows an Updating… view instead and isn't redrawn.
+local panel_paused = false
 local panel_css: string? = nil
 
 local function install_panel(css: string)
@@ -3317,7 +3319,7 @@ end
 -- the line stays well inside its budget.
 sync_panel = function(cx: WindowCx, force: boolean, settings: Settings?, cache: Cache?)
 	local pane = panel_pane
-	if pane == nil then
+	if pane == nil or panel_paused then
 		return
 	end
 	local state = if settings then panel_state(cx, settings, cache) else panel_state(cx, load_settings(), read_cache(now_ms()))
@@ -3340,6 +3342,36 @@ sync_panel = function(cx: WindowCx, force: boolean, settings: Settings?, cache: 
 		end
 	end)
 end
+
+-- An update about to land, announced by any window: the plugin's sheets go away while Tern reloads it, so the
+-- panel shows only Tern-styled nodes until then. The reloaded plugin draws the panel afresh (the reload timer
+-- below); an update that failed brings the panel back here.
+local function watch_update(cx: WindowCx?)
+	tern.timer(1000, watch_update)
+	local pane = panel_pane
+	if cx == nil then
+		return
+	end
+	local name = update.applying()
+	if name and pane and not panel_paused then
+		panel_paused = true
+		panel_sig = nil
+		pcall(function()
+			cx.canvas:set(pane :: number, {
+				view = ui.col({
+					ui.card({ ui.span("Updating omp Usage to " .. name, "strong") }, {
+						ui.progress(nil, "Downloading the update and reloading the plugin"),
+					}, { icon = "download" }),
+				}),
+				dock = ui.text(ui.span("The settings come back as soon as it reloads", "muted")),
+			})
+		end)
+	elseif name == nil and panel_paused then
+		panel_paused = false
+		sync_panel(cx, true)
+	end
+end
+tern.timer(1000, watch_update)
 
 -- This plugin's panel in this window, if one is open.
 local function find_panel(cx: WindowCx): number?

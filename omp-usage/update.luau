@@ -29,6 +29,7 @@ type Module = {
 	last_checked: () -> number?,
 	check: (cx: WindowCx, manual: boolean) -> (),
 	download: (cx: WindowCx) -> (),
+	applying: () -> string?,
 	status_segment: () -> StatusSegment?,
 }
 local M = {} :: Module
@@ -49,6 +50,7 @@ local KV_LAST = "omp-usage.update-last" -- os.time() of the last check that reac
 local KV_PENDING = "omp-usage.update-pending" -- a Pending
 local KV_KEPT = "omp-usage.update-kept" -- the upstream commit the user skipped
 local KV_CLAIM = "omp-usage.update-claim" -- the window that claimed the automatic check
+local KV_APPLYING = "omp-usage.update-applying" -- `{ name, at }`: an update landing, for the settings panels
 
 local FIRST_CHECK_MS = 20 * 1000 -- after a load, past Tern's own startup work
 local CLAIM_SETTLE_MS = 2000 -- long enough for every window ticking with this one to write its claim
@@ -57,6 +59,9 @@ local BADGE_POLL_MS = 10 * 1000 -- how soon a window shows (or drops) the status
 local CARD_COMMITS = 100 -- commits the update card shows in full
 local BODY_MAX = 4000 -- characters of one commit's message body the card shows
 local RELOAD_FALLBACK_MS = 5000 -- after an update, how long Tern's folder watch gets to reload the plugin
+local APPLY_WAIT_MS = 1500 -- before an update lands, for every window's once-a-second poll to see it coming
+local APPLYING_STALE_S = 60 -- an announced update that never reloaded this window stops counting
+local LOADED_AT = os.time() -- when this VM started: an update announced before it has already landed here
 -- No credential prompts or windows: a remote that needs them fails the check instead.
 local GIT_ENV = { GIT_TERMINAL_PROMPT = "0", GCM_INTERACTIVE = "never" }
 local UPDATE_ACTION = "plugin." .. tern.plugin.id .. ".update"
@@ -257,6 +262,21 @@ end
 
 local busy = false -- a check is under way in this window
 
+-- An update about to land, for every window's settings panel (window.luau): its name, from when it's announced
+-- until this window's plugin reloads (or the update fails). The plugin's style sheets go away while Tern reloads it,
+-- so a panel left as it is would flash unstyled buttons; told in time, each window swaps its panel for an
+-- Updating… view drawn in Tern's own styles. A VM started after the announcement is the reloaded one: it ignores it.
+function M.applying(): string?
+	local value = kv_get(KV_APPLYING)
+	if type(value) == "table" and type(value.name) == "string" and type(value.at) == "number" then
+		local age = os.time() - value.at
+		if value.at >= LOADED_AT and age >= 0 and age < APPLYING_STALE_S then
+			return value.name
+		end
+	end
+	return nil
+end
+
 local function apply(cx: WindowCx, pending: Pending)
 	if busy then
 		cx:toast("info", "omp Usage is already checking or updating")
@@ -264,28 +284,35 @@ local function apply(cx: WindowCx, pending: Pending)
 	end
 	busy = true
 	local name = update_name(pending.version, M.version(), pending.short)
-	-- Whether the omp extension changed: omp loads it at session start, so open sessions need a restart.
-	git(cx, { "diff", "--name-only", "HEAD", pending.sha }, 10000, function(diff: Git, cx2: WindowCx)
-		local extension = diff.ok and string.find("\n" .. diff.out, "\nomp/") ~= nil
-		git(cx2, { "merge", "--ff-only", "--quiet", pending.sha }, 30000, function(merge: Git, cx3: WindowCx)
-			busy = false
-			if not merge.ok then
-				cx3:toast("error", "omp Usage didn't update", reason(merge.err))
-				return
-			end
-			kv_set(KV_KEPT, nil)
-			set_pending(nil)
-			local sub = if extension then "The omp extension changed: restart omp sessions" else nil
-			cx3:toast("success", "omp Usage updated to " .. name, sub)
-			-- Tern watches a linked clone and reloads this window's plugins when the merge changes it. Only if that
-			-- didn't happen (this VM, which a reload replaces, is still here) ask for Reload plugins, which also
-			-- empties every plugin canvas left open (the settings panel) until it's opened again.
-			tern.timer(RELOAD_FALLBACK_MS, function(later: WindowCx?)
-				if later then
-					pcall(function()
-						later:command("reload_plugins")
-					end)
+	kv_set(KV_APPLYING, { name = name, at = os.time() })
+	-- Gives every window's once-a-second poll time to swap its panel out before the files change.
+	tern.timer(APPLY_WAIT_MS, function(later: WindowCx?)
+		local cx1 = later or cx
+		-- Whether the omp extension changed: omp loads it at session start, so open sessions need a restart.
+		git(cx1, { "diff", "--name-only", "HEAD", pending.sha }, 10000, function(diff: Git, cx2: WindowCx)
+			local extension = diff.ok and string.find("\n" .. diff.out, "\nomp/") ~= nil
+			git(cx2, { "merge", "--ff-only", "--quiet", pending.sha }, 30000, function(merge: Git, cx3: WindowCx)
+				busy = false
+				if not merge.ok then
+					kv_set(KV_APPLYING, nil) -- nothing landed: the panels come back as they were
+					cx3:toast("error", "omp Usage didn't update", reason(merge.err))
+					return
 				end
+				-- KV_APPLYING stays: the reloaded VMs ignore it, and until then the panels wait
+				kv_set(KV_KEPT, nil)
+				set_pending(nil)
+				local sub = if extension then "The omp extension changed: restart omp sessions" else nil
+				cx3:toast("success", "omp Usage updated to " .. name, sub)
+				-- Tern watches a linked clone and reloads this window's plugins when the merge changes it. Only if
+				-- that didn't happen (this VM, which a reload replaces, is still here) ask for Reload plugins, which
+				-- also empties every plugin canvas left open (the settings panel) until it's opened again.
+				tern.timer(RELOAD_FALLBACK_MS, function(last: WindowCx?)
+					if last then
+						pcall(function()
+							last:command("reload_plugins")
+						end)
+					end
+				end)
 			end)
 		end)
 	end)
