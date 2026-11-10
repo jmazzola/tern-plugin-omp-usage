@@ -243,9 +243,10 @@ function M.check(cx: WindowCx, manual: boolean)
 			end
 			git(cx2, { "rev-parse", "--short", "HEAD" }, 10000, function(rev: Git, cx3: WindowCx)
 				local head = trim(rev.out)
-				git(cx3, { "rev-list", "--count", "HEAD..@{u}" }, 10000, function(count: Git, cx4: WindowCx)
-					local behind = tonumber(trim(count.out))
-					if not rev.ok or not count.ok or behind == nil then
+				git(cx3, { "rev-list", "--left-right", "--count", "HEAD...@{u}" }, 10000, function(count: Git, cx4: WindowCx)
+					local ahead_text, behind_text = string.match(count.out, "^%s*(%d+)%s+(%d+)")
+					local ahead, behind = tonumber(ahead_text or ""), tonumber(behind_text or "")
+					if not rev.ok or not count.ok or ahead == nil or behind == nil then
 						stop(cx4, "omp Usage can't check for updates", reason(if rev.ok then count.err else rev.err))
 						return
 					end
@@ -253,6 +254,18 @@ function M.check(cx: WindowCx, manual: boolean)
 						busy = false
 						if manual then
 							cx4:toast("success", "omp Usage is up to date", head)
+						end
+						return
+					end
+					-- Local commits the upstream lacks: a fast-forward can't apply, so don't offer one. Merging or
+					-- rebasing someone's own work is theirs to do.
+					if (ahead :: number) > 0 then
+						busy = false
+						local title = "omp Usage has an update, but your clone has " .. plural(ahead :: number, "local commit")
+						if manual then
+							cx4:toast("info", title, "Merge it by hand: git pull, in the repo folder")
+						else
+							tern.log.info("omp-usage update check: " .. title)
 						end
 						return
 					end

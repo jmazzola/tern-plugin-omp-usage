@@ -179,8 +179,9 @@ kept). To stop the automatic checks, pick **Check for updates automatically** in
 it again to turn them back on. Every Tern window shares these choices, and one window checks per interval.
 
 The update is a fast-forward of the branch you have checked out, so it needs that branch to track a remote (as
-`main` does after `git clone`) and git on `PATH`. It doesn't touch local commits or uncommitted edits: if they
-block the fast-forward, the toast shows git's reason, and you can update by hand from the repo folder:
+`main` does after `git clone`) and git on `PATH`. It never merges or rebases your work: when the clone has local
+commits the remote lacks, it offers no update (Check for updates… says so), and when uncommitted edits block the
+fast-forward, the toast shows git's reason. Either way, update by hand from the repo folder:
 
 ```sh
 git pull
