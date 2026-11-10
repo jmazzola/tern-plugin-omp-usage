@@ -44,10 +44,20 @@ local function trim(text: string): string
 	return (string.gsub(text, "^%s+", ""):gsub("%s+$", ""))
 end
 
--- git's message for a failure, without its `fatal: ` / `error: ` prefix.
+-- git's message for a failure: its first `fatal:` or `error:` line without the prefix (git prints warnings, such
+-- as line-ending ones, before it), else its first line that isn't a warning or hint.
 local function reason(text: string): string
-	local line = string.match(text, "[^\r\n]*%S[^\r\n]*") or "git failed"
-	return trim((string.gsub(line, "^%a+: ", "")))
+	local fallback: string? = nil
+	for line in string.gmatch(text, "[^\r\n]+") do
+		local message = string.match(line, "^fatal: (.*)$") or string.match(line, "^error: (.*)$")
+		if message then
+			return trim(message)
+		end
+		if fallback == nil and string.find(line, "%S") and not string.find(line, "^warning: ") and not string.find(line, "^hint: ") then
+			fallback = trim(line)
+		end
+	end
+	return fallback or "git failed"
 end
 
 -- Runs git in the plugin's directory; `done` gets a fresh cx when the window gave one, else `cx`.
@@ -112,7 +122,9 @@ local function apply(cx: WindowCx, offer: Offer)
 			kv_set(KV_KEPT, nil)
 			local sub = if extension then "The omp extension changed: restart omp sessions" else nil
 			cx3:toast("success", "omp Usage updated to " .. target.short, sub)
-			cx3:command("reload_plugins")
+			pcall(function()
+				cx3:command("reload_plugins") -- Tern's watch of the clone reloads it too
+			end)
 		end)
 	end)
 end
@@ -168,25 +180,36 @@ local function prompt(cx: WindowCx, offer: Offer, manual: boolean)
 			url = if web then web .. "/compare/" .. offer.head .. "..." .. newest.sha else nil,
 		})
 	end
-	cx:pick({ items = items, placeholder = "Update omp Usage? Esc to decide later", icon = "download" })
-		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
-			busy = false
-			if item == nil or (item :: any).pick == "later" then
-				return
-			end
-			local choice = item :: any
-			local cx2 = next_cx or cx
-			if choice.pick == "update" then
-				apply(cx2, offer)
-			elseif choice.pick == "keep" then
-				kv_set(KV_KEPT, newest.sha)
-				cx2:toast("info", "Keeping omp Usage at " .. offer.head, "Update any time: omp Usage: Check for updates…")
-			elseif choice.url then
-				cx2:open(choice.url)
-			else
-				prompt(cx2, offer, manual) -- nothing to open: back to the choice
-			end
-		end)
+	local function answer(item: PickItem?, _err: string?, next_cx: WindowCx?)
+		busy = false
+		if item == nil or (item :: any).pick == "later" then
+			return
+		end
+		local choice = item :: any
+		local cx2 = next_cx or cx
+		if choice.pick == "update" then
+			apply(cx2, offer)
+		elseif choice.pick == "keep" then
+			kv_set(KV_KEPT, newest.sha)
+			cx2:toast("info", "Keeping omp Usage at " .. offer.head, "Update any time: omp Usage: Check for updates…")
+		elseif choice.url then
+			cx2:open(choice.url)
+		else
+			prompt(cx2, offer, manual) -- nothing to open: back to the choice
+		end
+	end
+	local opened, err = pcall(function()
+		cx:pick({ items = items, placeholder = "Update omp Usage? Esc to decide later", icon = "download" }):next(answer)
+	end)
+	if not opened then -- no picker (no pane to show it over, say): the next check asks again
+		busy = false
+		tern.log.warn("omp-usage update prompt didn't open: " .. tostring(err))
+		if manual then
+			pcall(function()
+				cx:toast("error", "omp Usage couldn't show the update", tostring(err))
+			end)
+		end
+	end
 end
 
 -- Fetches the upstream and offers what's new. `manual` reports every outcome; an automatic check stays quiet
@@ -287,7 +310,10 @@ local function tick(cx: WindowCx?)
 	if type(last) == "number" and now - last < CHECK_EVERY_S then
 		return
 	end
-	local claim = cx:window_key() .. "@" .. tostring(tern.now())
+	local ok, key = pcall(function()
+		return cx:window_key()
+	end)
+	local claim = (if ok then tostring(key) else "") .. "@" .. tostring(tern.now())
 	kv_set(KV_CHECKED, now)
 	kv_set(KV_CLAIM, claim)
 	tern.timer(CLAIM_SETTLE_MS, function(later: WindowCx?)
