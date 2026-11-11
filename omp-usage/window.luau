@@ -16,7 +16,9 @@
 -- chosen ones (`selected`), in the user's order. While a subagent's transcript is viewed (omp adds a `Viewing
 -- <agent>` row to the composer and its model chip shows the subagent's model, but the status stays the main
 -- session's), `current` shows the line the cache holds for that chip; otherwise it shows the status, which is
--- fresher. Without a fresh cache every mode falls back to the status.
+-- fresher. Without a fresh cache every mode falls back to the status. A provider signed in with several accounts
+-- shows all of them, in the user's order, or only the one chosen for it (see `account_view`); the card then sums
+-- up the others.
 --
 -- The line is an instrument strip: per provider its label, then per window its label, a slim bar filled to the
 -- share left with a lit tip, the share and its reset countdown, then saved resets; other statuses last. Each
@@ -170,18 +172,49 @@ local NAMED: { { key: string, palette: Palette } } = {
 -- Settings in `tern.kv` (every window shares them, so each refresh reads them again): the mode, the providers
 -- `selected` shows, color choices by provider id (`named:<key>`, or one or two `#rrggbb`), the providers'
 -- order (ids; providers it doesn't name follow in the preset order) and the windows hidden from the line, by
--- provider id (lowercased window labels: `5h`, `fable 7d`).
+-- provider id (lowercased window labels: `5h`, `fable 7d`). For a provider with several accounts, by provider
+-- id: the one account the line and card show (none: every account shown), the accounts' order (names; accounts it
+-- doesn't name follow in omp's order) and the accounts switched off, which the line and card leave out entirely.
 local KV_MODE = "omp-usage.mode"
 local KV_SELECTED = "omp-usage.selected"
 local KV_COLORS = "omp-usage.colors"
 local KV_ORDER = "omp-usage.order"
 local KV_HIDDEN = "omp-usage.hidden"
+local KV_ACCOUNT = "omp-usage.account"
+local KV_ACCOUNT_ORDER = "omp-usage.account-order"
+local KV_ACCOUNT_HIDDEN = "omp-usage.account-hidden"
+-- The card's height limit in rows: one of CARD_ROWS, 26 unless set. Rows are 18px, so 26 rows are a card about
+-- 480px tall, which a full-height pane on a 1080p screen holds; the plugin can't see a pane's height, so taller
+-- (or split) panes are the user's to set.
+local KV_CARD_ROWS = "omp-usage.card-rows"
+local CARD_ROWS = { 16, 20, 26, 32, 40, 50 }
+local CARD_ROWS_DEFAULT = 26
+-- In KV_ACCOUNT, in place of an account's name: show the provider's accounts combined, all in one set of windows
+-- (COMBINED), or a set per plan (COMBINED_PLANS: the accounts that report the same windows); each window's share
+-- their average (see `combined`).
+local COMBINED = "\1combined"
+local COMBINED_PLANS = "\1plans"
 
-type Window = { label: string, pct: number, reset: string?, saved: number?, expires: string? }
+-- With several accounts, a window's `account` and its label without it (`bare`: `Fable 7d` for `alice Fable
+-- 7d`), and `lead` on the first window of each account, where the line and card name the account. Combined (see
+-- `combined`), a group's lead window's `plan` is its heading in the card, in place of its name, and a window only
+-- some of the group's accounts have says how many in `covers` (`5 of the 10 accounts`), under it in the card.
+type Window = {
+	label: string,
+	pct: number,
+	reset: string?,
+	saved: number?,
+	expires: string?,
+	account: string?,
+	bare: string?,
+	lead: boolean?,
+	plan: string?,
+	covers: string?,
+}
 type Reset = { at: number, count: number, window: string? }
 -- A provider on the line: its key (provider id when known, else its label), label, windows and saved resets
--- (nil when the cache has none for it).
-type Group = { key: string, id: string?, label: string, windows: { Window }, resets: { Reset }? }
+-- (nil when the cache has none for it); `rest`, while one of its accounts is chosen, the other accounts' windows.
+type Group = { key: string, id: string?, label: string, windows: { Window }, resets: { Reset }?, rest: { Window }? }
 -- What the line and card show, where it came from (a change counts only between two lines from the same
 -- source), and the card's title.
 type Model = {
@@ -194,7 +227,8 @@ type Model = {
 -- `hide`: the ids of the status facts the line redraws, to hide in the bar.
 type Dock = { status: string?, chip: string?, viewing: boolean, hide: { string } }
 -- `windows`: every window the provider's accounts report, its plan's and those only some of its models have.
-type Provider = { id: string, label: string, line: string, resets: { Reset }, windows: { Window } }
+-- `accounts`: with several, their names in omp's order (as the line's labels start); else empty.
+type Provider = { id: string, label: string, line: string, resets: { Reset }, windows: { Window }, accounts: { string } }
 type Entry = { line: string, resets: { Reset } }
 type Cache = { at: number, models: { [string]: Entry }, providers: { Provider }? }
 type Settings = {
@@ -203,6 +237,10 @@ type Settings = {
 	colors: { [string]: string },
 	order: { string },
 	hidden: { [string]: { string } },
+	account: { [string]: string },
+	account_order: { [string]: { string } },
+	account_hidden: { [string]: { string } },
+	card_rows: number,
 }
 -- `moved`: the windows (by provider and label) whose share changed, and which way.
 type Pulse = { seq: number, until_ms: number, moved: { [string]: string } }
@@ -219,6 +257,9 @@ local pulse_seq = 0
 -- The card's rows for the last model (see `card`).
 local card_for: string? = nil
 local card_rows: { Row } = {}
+-- For the card `card` last built: how many rows each account shown in full takes, by `<group key>/<account>`
+-- (the panel reads it straight after a `fixed = "all"` card, to find the picks that make the tallest card).
+local card_runs: { [string]: number } = {}
 -- The cache file as last read, its parse, and the last providers it listed (see `read_cache`).
 local cache_raw: string? = nil
 local cache_parsed: Cache? = nil
@@ -403,8 +444,8 @@ local function span(ms: number): string
 	return if hours % 24 > 0 then string.format("%dd %dh", days, hours % 24) else string.format("%dd", days)
 end
 
--- A saved reset's card row: `saved reset · expires Thu Oct 22, 12:00 PM · in 10d 18h` (`2 saved resets · …` for
--- a credit of two); nil once it has expired.
+-- A saved reset's card row: `saved reset · in 10d 18h · Oct 22` (`2 saved resets · …` for a credit of two; the
+-- year after the date when it isn't this year's), short so the card stays narrow; nil once it has expired.
 local function reset_text(reset: Reset, now: number, fable: boolean): string?
 	if reset.at <= now then
 		return nil
@@ -414,13 +455,13 @@ local function reset_text(reset: Reset, now: number, fable: boolean): string?
 	if not ok or type(t) ~= "table" or not ok_now or type(today) ~= "table" then
 		return nil
 	end
-	local date = string.format("%s %s %d", WEEKDAYS[(t :: any).wday], MONTHS[(t :: any).month], (t :: any).day)
+	local date = string.format("%s %d", MONTHS[(t :: any).month], (t :: any).day)
 	if (t :: any).year ~= (today :: any).year then
 		date ..= " " .. tostring((t :: any).year)
 	end
 	local kind = if fable then "Fable reset" else "saved reset"
 	local what = if reset.count > 1 then string.format("%d %ss", reset.count, kind) else kind
-	return string.format("%s · expires %s, %s · in %s", what, date, clock(t), span(reset.at - now))
+	return string.format("%s · in %s · %s", what, span(reset.at - now), date)
 end
 
 -- One usage-remaining.js window, `[Provider ][Scope ]<span> <meter> <N>% left[ (<reset>)][ (+N) | (!N - <left> left)]`,
@@ -545,7 +586,23 @@ local function parse_cache(doc: any): Cache?
 			if type(id) == "string" and type(item) == "table" and type(item.line) == "string" and item.line ~= "" then
 				local label = if type(item.label) == "string" and item.label ~= "" then item.label else id
 				local _, windows = parse_line(item.line)
-				table.insert(list, { id = id, label = label, line = item.line, resets = resets_of(item.resets), windows = windows })
+				-- a provider's accounts, listed only when it has several
+				local accounts: { string } = {}
+				if type(item.accounts) == "table" then
+					for _, name in ipairs(item.accounts) do
+						if type(name) == "string" and name ~= "" and not table.find(accounts, name) then
+							table.insert(accounts, name)
+						end
+					end
+				end
+				table.insert(list, {
+					id = id,
+					label = label,
+					line = item.line,
+					resets = resets_of(item.resets),
+					windows = windows,
+					accounts = if #accounts > 1 then accounts else {},
+				})
 			end
 		end
 		-- after the plan's windows, those only some models have (Codex Spark's), from those models' lines
@@ -644,7 +701,7 @@ local function offered_providers(cache: Cache?): { Provider }
 	end
 	local list: { Provider } = {}
 	for label, id in LABEL_IDS do
-		table.insert(list, { id = id, label = label, line = "", resets = {}, windows = {} })
+		table.insert(list, { id = id, label = label, line = "", resets = {}, windows = {}, accounts = {} })
 	end
 	sort_providers(list)
 	return list
@@ -684,10 +741,18 @@ local function load_settings(): Settings
 		colors = {},
 		order = id_list(store.get(KV_ORDER)),
 		hidden = {},
+		account = {},
+		account_order = {},
+		account_hidden = {},
+		card_rows = CARD_ROWS_DEFAULT,
 	}
 	local mode = store.get(KV_MODE)
 	if mode == "all" or mode == "selected" then
 		settings.mode = mode
+	end
+	local rows = store.get(KV_CARD_ROWS)
+	if type(rows) == "number" and table.find(CARD_ROWS, rows) then
+		settings.card_rows = rows
 	end
 	local colors = store.get(KV_COLORS)
 	if type(colors) == "table" then
@@ -703,6 +768,32 @@ local function load_settings(): Settings
 			local list = id_list(labels)
 			if type(id) == "string" and #list > 0 then
 				settings.hidden[id] = list
+			end
+		end
+	end
+	local account = store.get(KV_ACCOUNT)
+	if type(account) == "table" then
+		for id, name in pairs(account) do
+			if type(id) == "string" and type(name) == "string" and name ~= "" then
+				settings.account[id] = name
+			end
+		end
+	end
+	local account_order = store.get(KV_ACCOUNT_ORDER)
+	if type(account_order) == "table" then
+		for id, names in pairs(account_order) do
+			local list = id_list(names)
+			if type(id) == "string" and #list > 0 then
+				settings.account_order[id] = list
+			end
+		end
+	end
+	local account_hidden = store.get(KV_ACCOUNT_HIDDEN)
+	if type(account_hidden) == "table" then
+		for id, names in pairs(account_hidden) do
+			local list = id_list(names)
+			if type(id) == "string" and #list > 0 then
+				settings.account_hidden[id] = list
 			end
 		end
 	end
@@ -722,6 +813,288 @@ local function shown_windows(settings: Settings, id: string?, windows: { Window 
 		end
 	end
 	return kept
+end
+
+-- A provider's accounts in the user's order: those `order` names first, as it has them, then the rest in omp's.
+local function accounts_in_order(accounts: { string }, order: { string }?): { string }
+	local list: { string } = {}
+	for _, name in (order or {}) :: { string } do
+		if table.find(accounts, name) and not table.find(list, name) then
+			table.insert(list, name)
+		end
+	end
+	for _, name in accounts do
+		if not table.find(list, name) then
+			table.insert(list, name)
+		end
+	end
+	return list
+end
+
+-- The account of `accounts` a window's label starts with (`alice` for `alice Fable 7d`), and the label without it.
+local function account_of(label: string, accounts: { string }): (string?, string?)
+	local key = string.lower(label)
+	for _, name in accounts do
+		local prefix = string.lower(name) .. " "
+		if string.sub(key, 1, #prefix) == prefix then
+			return name, string.sub(label, #prefix + 1)
+		end
+	end
+	return nil, nil
+end
+
+-- Whether provider `id`'s account `name` is switched off.
+local function account_off(settings: Settings, id: string, name: string): boolean
+	local off = settings.account_hidden[id]
+	return off ~= nil and table.find(off, name) ~= nil
+end
+
+-- The one account the line and card show for provider `id` (of `accounts`), while it is still signed in and
+-- switched on; nil for every account that is.
+local function chosen_account(settings: Settings, id: string, accounts: { string }): string?
+	local chosen = settings.account[id]
+	return if chosen and table.find(accounts, chosen) and not account_off(settings, id, chosen) then chosen else nil
+end
+
+-- A window's name in the card: `Weekly`, and a scoped one's with its scope, `Fable weekly`.
+local function window_name(label: string): string
+	local scope, span = string.match(label, "^(.-)%s*(%S+)$")
+	local name = WINDOW_NAMES[span :: string] or span :: string
+	return if scope ~= nil and scope ~= "" then scope .. " " .. string.lower(name) else name
+end
+
+-- A provider's accounts (`on`: each one's windows, in order, the first leading) combined, all in one group, or, `by
+-- plan`, the accounts that report the same windows together (most likely one plan; omp doesn't say). Each group
+-- gets one run of windows (every window any of its accounts has, in the order they first come), named for how many
+-- accounts it holds (`6 accounts`; a group of one keeps the account's name). A window's share is the average of
+-- the group's accounts that have it (`covers` says how many when not all do), its reset the soonest of theirs, its
+-- saved resets all of theirs. `loose` (windows without an account) go first. When one window sets the groups
+-- apart, the groups without it say so in their name (`4 accounts, no 5H`), and each group's lead window carries
+-- `plan`, its heading in the card (`6 accounts with a 5-hour window`); with more than one, the heading lists the
+-- group's windows (`4 accounts · 7D · FABLE 7D`). Also, for the panel: the chip's text and each account's group tag.
+local function combined(on: { { Window } }, loose: { Window }, by_plan: boolean): ({ Window }, { chip: string, tags: { [string]: string } })
+	local plans: { { key: string, lists: { { Window } } } } = {}
+	for _, list in on do
+		local labels: { string } = {}
+		for _, window in list do
+			table.insert(labels, string.lower(window.bare or window.label))
+		end
+		table.sort(labels)
+		local key = if by_plan then table.concat(labels, "|") else ""
+		local plan = nil
+		for _, candidate in plans do
+			if candidate.key == key then
+				plan = candidate
+			end
+		end
+		if plan == nil then
+			plan = { key = key, lists = {} }
+			table.insert(plans, plan)
+		end
+		table.insert(plan.lists, list)
+	end
+	-- What sets the groups apart: the windows only some of them have. With one, each group says whether it has it;
+	-- else each lists its windows.
+	local counts: { [string]: number } = {}
+	local shown: { [string]: string } = {}
+	for _, plan in plans do
+		for _, window in plan.lists[1] do
+			local key = string.lower(window.bare or window.label)
+			counts[key] = (counts[key] or 0) + 1
+			shown[key] = window.bare or window.label
+		end
+	end
+	local differs: { string } = {}
+	for key, n in counts do
+		if n < #plans then
+			table.insert(differs, key)
+		end
+	end
+	local info = { chip = "", tags = {} :: { [string]: string } }
+	-- each group's name on the line and in one-row summaries (`6 accounts`, `4 accounts, no 5H`), and its heading in
+	-- the card (`4 accounts without a 5-hour window`)
+	local names: { string } = {}
+	local heads: { string } = {}
+	local accounts = 0
+	for p, plan in plans do
+		accounts += #plan.lists
+		names[p] = if #plan.lists == 1 then plan.lists[1][1].account :: string else tostring(#plan.lists) .. " accounts"
+		heads[p] = names[p]
+	end
+	if #plans == 1 then
+		info.chip = if by_plan
+			then string.format("by plan · all %d alike", accounts)
+			else string.format("combined · %d accounts", accounts)
+	elseif #differs == 1 then
+		local name = window_name(shown[differs[1]])
+		local nice = if string.sub(name, 1, 5) == "Fable" then name else string.lower(name)
+		-- the rows' tags go by the window's short label, as the rows' windows do (`5H`, `no 5H`), to keep the rows short
+		local short = string.upper(shown[differs[1]])
+		local with, without = 0, 0
+		for p, plan in plans do
+			local has = false
+			for _, window in plan.lists[1] do
+				has = has or string.lower(window.bare or window.label) == differs[1]
+			end
+			heads[p] = names[p] .. (if has then " with a " else " without a ") .. nice .. " window"
+			if not has then
+				names[p] ..= ", no " .. short
+			end
+			for _, list in plan.lists do
+				info.tags[list[1].account :: string] = if has then short else "no " .. short
+			end
+			if has then
+				with += #plan.lists
+			else
+				without += #plan.lists
+			end
+		end
+		info.chip = string.format("by plan · %d with %s, %d without", with, short, without)
+	else
+		for p, plan in plans do
+			local labels: { string } = {}
+			for _, window in plan.lists[1] do
+				table.insert(labels, string.upper(window.bare or window.label))
+			end
+			local list = table.concat(labels, " · ")
+			heads[p] = names[p] .. " · " .. list
+			for _, member in plan.lists do
+				info.tags[member[1].account :: string] = list
+			end
+		end
+		info.chip = string.format("by plan · %d groups by their windows", #plans)
+	end
+	local out: { Window } = table.clone(loose)
+	-- how soon a countdown (`2h 11m`, `soon`) runs out, in minutes; anything else last
+	local function minutes(s: string?): number
+		if s == "soon" then
+			return 0
+		end
+		local m = if s then countdown_minutes(s :: string) else nil
+		return m or math.huge
+	end
+	for p, plan in plans do
+		local name = names[p]
+		-- every window the group's accounts have, in the order they first come
+		local order: { Window } = {}
+		local seen: { [string]: boolean } = {}
+		for _, list in plan.lists do
+			for _, window in list do
+				local key = string.lower(window.bare or window.label)
+				if not seen[key] then
+					seen[key] = true
+					table.insert(order, window)
+				end
+			end
+		end
+		for w, window in order do
+			local bare = string.lower(window.bare or window.label)
+			local total, count, saved = 0, 0, 0
+			local reset, expires = window.reset, window.expires
+			for _, list in plan.lists do
+				for _, other in list do
+					if string.lower(other.bare or other.label) == bare then
+						total += other.pct
+						count += 1
+						saved += other.saved or 0
+						if minutes(other.reset) < minutes(reset) then
+							reset = other.reset
+						end
+						if other.expires and minutes(other.expires) < minutes(expires) then
+							expires = other.expires
+						end
+					end
+				end
+			end
+			table.insert(out, {
+				label = name .. " " .. (window.bare or window.label),
+				pct = math.floor(total / count + 0.5),
+				reset = reset,
+				saved = if saved > 0 then saved else nil,
+				expires = if saved > 0 then expires else nil,
+				account = name,
+				bare = window.bare or window.label,
+				lead = if w == 1 then true else nil,
+				plan = if w == 1 and heads[p] ~= name then heads[p] else nil,
+				covers = if count < #plan.lists then string.format("%d of the %d accounts", count, #plan.lists) else nil,
+			})
+		end
+	end
+	return out, info
+end
+
+-- A provider's windows as the settings show its accounts: every account switched on, in the user's order (one
+-- after another, each window in the extension's order), only the account picked for it, the other accounts'
+-- windows then coming back as `rest` for the card, or the accounts combined (see `combined`). Accounts switched
+-- off are left out of all of it. Each window knows its account, and the first of each leads it (see `Window`).
+-- With fewer than two accounts the windows come back as they are. Combined, the chip's text and the accounts' group
+-- tags come back third (see `combined`).
+local function account_view(
+	settings: Settings,
+	id: string?,
+	accounts: { string },
+	windows: { Window }
+): ({ Window }, { Window }?, { chip: string, tags: { [string]: string } }?)
+	if id == nil or #accounts < 2 then
+		return windows, nil
+	end
+	local by: { [string]: { Window } } = {}
+	local shown: { Window } = {}
+	local loose: { Window } = {}
+	for _, window in windows do
+		local name, bare = account_of(window.label, accounts)
+		if name then
+			local copy = table.clone(window)
+			copy.account, copy.bare = name, bare
+			by[name] = by[name] or {}
+			table.insert(by[name], copy)
+		else
+			table.insert(shown, window) -- none should be without one; any that is goes first
+			table.insert(loose, window)
+		end
+	end
+	local one = chosen_account(settings, id :: string, accounts)
+	local rest: { Window }? = if one then {} else nil
+	local on: { { Window } } = {}
+	for _, name in accounts_in_order(accounts, settings.account_order[id :: string]) do
+		local list = by[name]
+		if list and not account_off(settings, id :: string, name) then
+			list[1].lead = true
+			table.insert(on, list)
+			for _, window in list do
+				table.insert(if one == nil or name == one then shown else rest :: { Window }, window)
+			end
+		end
+	end
+	local mode = settings.account[id :: string]
+	if one == nil and (mode == COMBINED or mode == COMBINED_PLANS) then
+		local together, info = combined(on, loose, mode == COMBINED_PLANS)
+		return together, nil, info
+	end
+	return shown, rest
+end
+
+-- A provider's accounts switched on, in the user's order.
+local function shown_accounts(settings: Settings, provider: Provider): { string }
+	local list: { string } = {}
+	for _, name in accounts_in_order(provider.accounts, settings.account_order[provider.id]) do
+		if not account_off(settings, provider.id, name) then
+			table.insert(list, name)
+		end
+	end
+	return list
+end
+
+-- The accounts of provider `id` in the cache (empty with one, or without a cache).
+local function accounts_of(cache: Cache?, id: string?): { string }
+	if cache and cache.providers and id then
+		for _, provider in cache.providers :: { Provider } do
+			if provider.id == id then
+				return provider.accounts
+			end
+		end
+	end
+	return {}
 end
 
 -- `list` in the user's order: the providers `order` names first, as it has them, then the rest in the preset order.
@@ -747,9 +1120,10 @@ local function ordered(list: { Provider }, order: { string }): { Provider }
 	return sorted
 end
 
--- The order to store once `id` moves (`up`, `down`, `top`, `bottom`) among `shown`, the ids of the providers on
--- offer in their order. It names every one of them; ids it named that aren't on offer now keep their places.
-local function moved(order: { string }, shown: { string }, id: string, how: string): { string }
+-- The order to store once `id` moves among `shown`, the ids on offer in their order: `how` is a picker's move (`up`,
+-- `down`, `top`, `bottom`) or a slot of the panel's pick and place (`at`: before what is `at`th once `id` is
+-- lifted out, or last past the end). It names every id on offer; ids it named that aren't now keep their places.
+local function moved(order: { string }, shown: { string }, id: string, how: string | number): { string }
 	local full = table.clone(order)
 	for _, item in shown do
 		if not table.find(full, item) then
@@ -763,7 +1137,11 @@ local function moved(order: { string }, shown: { string }, id: string, how: stri
 	-- the neighbor it goes before (or after)
 	local anchor: string? = nil
 	local after = false
-	if how == "up" then
+	if type(how) == "number" then
+		local rest = table.clone(shown)
+		table.remove(rest, i)
+		anchor, after = rest[how] or rest[#rest], rest[how] == nil
+	elseif how == "up" then
 		anchor = shown[i - 1]
 	elseif how == "down" then
 		anchor, after = shown[i + 1], true
@@ -854,15 +1232,23 @@ local function provider_id(label: string, cache: Cache?): string?
 	return LABEL_IDS[label]
 end
 
+local function window_signature(window: Window): string
+	local s = string.format("%s:%d:%s:%s:%s", window.label, window.pct, window.reset or "", tostring(window.saved or ""), window.expires or "")
+	if window.account then
+		s ..= "@" .. (window.account :: string) .. (if window.lead then "^" else "")
+	end
+	return s
+end
+
 local function signature_of(groups: { Group }, others: { string }, title: string): string
 	local parts: { string } = { title }
 	for _, group in groups do
 		table.insert(parts, group.key .. "=" .. group.label)
 		for _, window in group.windows do
-			table.insert(
-				parts,
-				string.format("%s:%d:%s:%s:%s", window.label, window.pct, window.reset or "", tostring(window.saved or ""), window.expires or "")
-			)
+			table.insert(parts, window_signature(window))
+		end
+		for _, window in (group.rest or {}) :: { Window } do
+			table.insert(parts, "~" .. window_signature(window))
 		end
 		for _, reset in group.resets or {} do
 			table.insert(parts, string.format("r%d*%d:%s", reset.at, reset.count, reset.window or ""))
@@ -878,7 +1264,8 @@ end
 -- focused agent's: while a subagent's transcript is viewed, the line the cache holds for its model's chip name
 -- (an empty one: no usage line), else the status. The status's other parts follow either way, and saved resets
 -- come from the cache entry the line came from (the status's model is the chip's). Windows hidden in the
--- settings are left out; a mode with providers to show shows them even when that leaves nothing.
+-- settings are left out; a mode with providers to show shows them even when that leaves nothing. A provider with
+-- several accounts shows them as the settings say (see `account_view`).
 local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 	local label, windows, others = parse_line(if dock.status then usage_part(dock.status) else "")
 	local groups: { Group } = {}
@@ -892,6 +1279,8 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 				local provider_label, provider_windows = parse_line(provider.line)
 				listed = listed or #provider_windows > 0
 				provider_windows = shown_windows(settings, provider.id, provider_windows)
+				local rest: { Window }? = nil
+				provider_windows, rest = account_view(settings, provider.id, provider.accounts, provider_windows)
 				if #provider_windows > 0 then
 					table.insert(groups, {
 						key = provider.id,
@@ -899,6 +1288,7 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 						label = provider_label or provider.label,
 						windows = provider_windows,
 						resets = provider.resets,
+						rest = rest,
 					})
 				end
 			end
@@ -915,6 +1305,8 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 		end
 		local id = if label then provider_id(label, cache) else nil
 		windows = shown_windows(settings, id, windows)
+		local rest: { Window }? = nil
+		windows, rest = account_view(settings, id, accounts_of(cache, id), windows)
 		if #windows > 0 then
 			table.insert(groups, {
 				key = id or label or "usage",
@@ -922,6 +1314,7 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 				label = label or "",
 				windows = windows,
 				resets = if entry then entry.resets else nil,
+				rest = rest,
 			})
 			title = (label or "") .. (if label then " usage" else "Usage")
 			if source ~= "status" then
@@ -1038,6 +1431,8 @@ type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
 -- One provider: `Claude  5H ━━━━━━━━ 98% left  3h 57m · 7D ━━━━━━━━ 71% left  11h 37m  +1 · <other statuses>`.
 -- Several (the composer is at most ~115 glyphs wide) go compact, the countdowns and the word `left` left to the
 -- card, and a `·` only between providers: `Claude  5H ━━━━━━ 98%  7D ━━━━━━ 71% +1 · Codex  7D ━━━━━━ 79% +2`.
+-- A provider with several accounts names each once, in its color, before its first window, which a `·` sets
+-- apart from the account before: `Claude alice  7D ━━━━━━━━ 68% left … · bob  5H ━━━━━━━━ 40% left …`.
 -- Each window's parts are joined by no-break spaces (a provider's label with its first window) so it wraps
 -- whole; with them, what colors each part. `compact` overrides the format the number of providers picks.
 local function line_of(model: Model, compact: boolean?): Line
@@ -1062,16 +1457,21 @@ local function line_of(model: Model, compact: boolean?): Line
 	for g, group in model.groups do
 		for w, window in group.windows do
 			local tone = tone_of(window.pct)
-			if w > 1 and several then
+			local account = if window.lead then window.account else nil
+			if w > 1 and several and account == nil then
 				add(" " .. NBSP)
 			else
 				next_part()
 			end
 			if w == 1 and group.label ~= "" then
 				add(group.label, group_color(g, "a"))
+				add(if account then NBSP else NBSP .. NBSP)
+			end
+			if account then
+				add(unbroken(account :: string), group_color(g, "a"))
 				add(NBSP .. NBSP)
 			end
-			add(unbroken(string.upper(window.label)), "var(--ou-lbl)")
+			add(unbroken(string.upper(window.bare or window.label)), "var(--ou-lbl)")
 			add(NBSP)
 			local at = line.glyphs
 			add(string.rep(BAR, bar_glyphs))
@@ -1181,16 +1581,26 @@ end
 local HOST = "%s.sf-col[data-role^='omp.editor'] > .sf-row[data-role='omp.composer.chips']:is(.sf-hidden, .sf-void)"
 local METER = ".tn-pane.on .sf-meter[data-role='omp.composer.context']"
 
--- The target in the focused pane; `region` narrows it by a class of the surface region (`.sf-chat-reader`,
+-- The pane the line is drawn in: the focused one (`.tn-pane.on`), or, while the settings panel has focus and its
+-- tab holds a single agent pane, that pane (`.tn-pane.agent`), so a click in the panel shows on the line beside it at
+-- once instead of when the agent pane has focus again. Set by `refresh` before it draws.
+local FOCUSED_PANE = ".tn-pane.on"
+local line_pane = FOCUSED_PANE
+
+local function meter(): string
+	return line_pane .. " .sf-meter[data-role='omp.composer.context']"
+end
+
+-- The target in the line's pane; `region` narrows it by a class of the surface region (`.sf-chat-reader`,
 -- `.sf-still`), which sits between the pane and the composer.
 local function host(region: string?): string
-	return ".tn-pane.on " .. string.format(HOST, if region then region .. " " else "")
+	return line_pane .. " " .. string.format(HOST, if region then region .. " " else "")
 end
 
 -- The providers' colors as variables on the composer, which the line, its tips, the capsule and the card all
 -- sit in; the capsule's ring and the card's glow follow the line's one provider (with several, the theme's), and
--- the ring turns `--warn` or `--bad` with the lowest window.
-local function palette_css(model: Model, settings: Settings): string
+-- the ring turns `--warn` or `--bad` with the lowest window. `target` sets them elsewhere (the panel's preview).
+local function palette_css(model: Model, settings: Settings, target: string?): string
 	local lines: { string } = {}
 	local lowest: number? = nil
 	for g, group in model.groups do
@@ -1213,7 +1623,7 @@ local function palette_css(model: Model, settings: Settings): string
 	-- Tern's popover glass is translucent and counts on a backdrop blur, which doesn't take on the card, so text
 	-- behind it would show through: the capsule and card take the glass's color (the card's, in light) opaque
 	table.insert(lines, "\t--ou-glass: light-dark(rgb(from var(--card) r g b / 1), rgb(from var(--pop-bg) r g b / 1));")
-	return ".tn-pane.on .sf-col[data-role^='omp.editor'] {\n" .. table.concat(lines, "\n") .. "\n}"
+	return (target or line_pane .. " .sf-col[data-role^='omp.editor']") .. " {\n" .. table.concat(lines, "\n") .. "\n}"
 end
 
 -- The line twice: on the meter at rest, and on the hover target over it, at full strength. The target's two
@@ -1359,7 +1769,7 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 		table.insert(clips, "border-box")
 	end
 	return fill(LINE_CSS, {
-		METER = METER,
+		METER = meter(),
 		HOST = host(nil),
 		HOST_READER = host(".sf-chat-reader"),
 		HOST_SPINE = host(".sf-chat-spine"),
@@ -1369,7 +1779,7 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 		PAINT = paint,
 		TIPS_CSS = if #rest.images > 0
 			then fill(TIPS_CSS, {
-				METER = METER,
+				METER = meter(),
 				IMAGES = table.concat(rest.images, ", "),
 				POSITIONS = table.concat(rest.positions, ", "),
 				SIZES = table.concat(rest.sizes, ", "),
@@ -1383,90 +1793,258 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 	})
 end
 
--- A window's name in the card: `Weekly`, and a scoped one's with its scope, `Fable weekly`.
-local function window_name(label: string): string
-	local scope, span = string.match(label, "^(.-)%s*(%S+)$")
-	local name = WINDOW_NAMES[span :: string] or span :: string
-	return if scope ~= nil and scope ~= "" then scope .. " " .. string.lower(name) else name
-end
-
 -- The card's rows for a model (the first is the title): clock times are worked out when a model first shows, so
 -- they don't drift with every poll between the extension's 60s refreshes. With several providers each gets a
 -- row of its label in its color. A saved reset's row (its expiry date, from the cache) sits under the window
 -- that counts it (`+N`); without dates the line's count stands in. `hint`, last, says how to open the settings.
-local function card(model: Model, hint: string): { Row }
-	local key = model.signature .. "\n" .. hint
+-- A provider with several accounts gets a row in its color per account, over that account's windows (`alice`, or
+-- `Claude alice` beside other providers), and while one account is chosen the others follow it a row each, what
+-- they have left at a glance: the card can't be clicked, so it shows the rest rather than tabs. The card keeps to
+-- the user's limit (`limit` rows, see CARD_ROWS): past it, the accounts the line starts with keep their windows in
+-- full as long as the card fits, and the rest get that one row instead, colored by their lowest window; if even
+-- that is too tall, the last of those rows fold into one, `+4 more accounts · lowest 7D 5%`. An account picked in
+-- the panel always shows its windows in full: it was picked to be seen. Only when it and the providers without
+-- accounts outgrow the limit on their own is the card taller (the panel says so).
+
+-- An account's windows on one row, each window's saved resets beside it as the line has them (`+NF` for Fable
+-- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`.
+local function account_summary(prefix: string, windows: { Window }, provider: string?): (string, number)
+	local text = prefix
+	local lowest = 100
+	for _, window in windows do
+		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
+		if window.saved then
+			text ..= " +" .. tostring(window.saved) .. (if is_fable(provider, window.bare or window.label) then "F" else "")
+		end
+		lowest = math.min(lowest, window.pct)
+	end
+	return text, lowest
+end
+
+-- `fixed` builds the card as the panel measures it instead of fitting it to `limit`: "all", every account in full
+-- and a row for every other; "least", every account summed up and every summary folded.
+local function card(model: Model, hint: string, limit: number, fixed: string?): { Row }
+	local key = model.signature .. "\n" .. hint .. "\n" .. tostring(limit) .. "\n" .. tostring(fixed)
 	if key == card_for then
 		return card_rows
 	end
 	local now = now_ms()
-	local rows: { Row } = { { text = model.title, color = "var(--oc-head)" } }
-	local several = #model.groups > 1
-	for g, group in model.groups do
-		local accent = group_color(g, "a")
-		if several then
-			table.insert(rows, { text = group.label, color = accent })
-		end
-		local resets = group.resets or {}
-		local function add_resets(label: string): boolean
-			local fable = is_fable(group.id, label)
-			local added = false
-			for _, reset in resets do
-				if reset.window == label or (reset.window == nil and label == "7d") then
-					local text = reset_text(reset, now, fable)
-					if text then
-						added = true
-						table.insert(rows, {
-							text = CARD_INDENT .. text,
-							color = if reset.at - now <= RESET_WARN_MS then "var(--oc-warn)" else accent,
-						})
+	-- an account's (or provider's) rows in full, by group and run: the same in every build, so made once
+	local done: { [string]: { Row } } = {}
+	-- `full`: how many accounts, in the line's order, show their windows; of the rest, `keep` get a row each (the
+	-- accounts not chosen beside a picked one count too) and the others fold into one row per provider. A picked
+	-- account (its provider has `rest`) always shows in full. The rows also carry `runs`: how many rows each
+	-- account shown in full takes, by `<group key>/<account>` (the panel measures picks with them).
+	local function build(full: number, keep: number): { Row }
+		local shown, kept = 0, 0
+		local rows: { Row } = { { text = model.title, color = "var(--oc-head)" } }
+		local runs_rows: { [string]: number } = {}
+		local several = #model.groups > 1
+		for g, group in model.groups do
+			local accent = group_color(g, "a")
+			local first = group.windows[1]
+			if several and not (first and first.lead) then
+				table.insert(rows, { text = group.label, color = accent })
+			end
+			local resets = group.resets or {}
+			local function add_resets(into: { Row }, label: string): boolean
+				local fable = is_fable(group.id, label)
+				local added = false
+				for _, reset in resets do
+					if reset.window == label or (reset.window == nil and label == "7d") then
+						local text = reset_text(reset, now, fable)
+						if text then
+							added = true
+							table.insert(into, {
+								text = CARD_INDENT .. text,
+								color = if reset.at - now <= RESET_WARN_MS then "var(--oc-warn)" else accent,
+							})
+						end
+					end
+				end
+				return added
+			end
+			-- an account's row, or (past `keep`) its share of the provider's fold
+			local folded, lowest, lowest_text, fold_muted = 0, 101, "", false
+			local function one_row(name: string, windows: { Window }, color: string?, rule: boolean)
+				if kept < keep then
+					kept += 1
+					local text, low = account_summary((if several then group.label .. " " else "") .. name, windows, group.id)
+					local tone = tone_of(low)
+					table.insert(rows, {
+						text = text,
+						color = color or (if tone == "ok" then accent else "var(--oc-win-" .. tone .. ")"),
+						rule = rule,
+					})
+					return
+				end
+				folded += 1
+				fold_muted = fold_muted or color ~= nil
+				for _, window in windows do
+					if window.pct < lowest then
+						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
 					end
 				end
 			end
-			return added
-		end
-		for w, window in group.windows do
-			local tone = tone_of(window.pct)
-			local a, b = window_colors(tone, g)
-			table.insert(rows, {
-				text = window_name(window.label) .. " window",
-				right = tostring(window.pct) .. "% left",
-				color = "var(--oc-win-" .. tone .. ")",
-				share = math.clamp(window.pct, 0, 100) / 100,
-				a = a,
-				b = b,
-			})
-			local has_dates = add_resets(string.lower(window.label))
-			if not has_dates and window.saved then
-				local saved = window.saved :: number
-				local kind = if is_fable(group.id, window.label) then "Fable reset" else "saved reset"
-				local row = string.format("%d %s%s", saved, kind, if saved == 1 then "" else "s")
-				if window.expires then
-					row ..= " · expires in " .. (window.expires :: string)
+			-- the group's windows by account (one run, for a provider without accounts)
+			local runs: { { name: string?, windows: { Window } } } = {}
+			for _, window in group.windows do
+				if #runs == 0 or (window.lead and window.account) then
+					table.insert(runs, { name = window.account, windows = {} })
 				end
+				table.insert(runs[#runs].windows, window)
+			end
+			for r, run in runs do
+				if run.name and group.rest == nil and shown >= full then
+					one_row(run.name :: string, run.windows, nil, r > 1)
+					continue
+				end
+				if run.name and group.rest == nil then
+					shown += 1
+				end
+				local made = g .. ":" .. tostring(r)
+				local part = done[made]
+				if part == nil then
+					local new: { Row } = {}
+					if run.name then
+						table.insert(new, {
+							text = (if several then group.label .. " " else "")
+								.. (run.windows[1].plan or run.name :: string),
+							color = accent,
+							rule = r > 1,
+						})
+					end
+					for _, window in run.windows do
+						local tone = tone_of(window.pct)
+						local a, b = window_colors(tone, g)
+						table.insert(new, {
+							text = window_name(window.bare or window.label) .. " window",
+							right = tostring(window.pct) .. "% left",
+							color = "var(--oc-win-" .. tone .. ")",
+							share = math.clamp(window.pct, 0, 100) / 100,
+							a = a,
+							b = b,
+						})
+						if window.covers then
+							table.insert(new, { text = CARD_INDENT .. (window.covers :: string), color = "var(--oc-mute)" })
+						end
+						local has_dates = add_resets(new, string.lower(window.label))
+						if not has_dates and window.saved then
+							local saved = window.saved :: number
+							local kind = if is_fable(group.id, window.label) then "Fable reset" else "saved reset"
+							local row = string.format("%d %s%s", saved, kind, if saved == 1 then "" else "s")
+							if window.expires then
+								row ..= " · expires in " .. (window.expires :: string)
+							end
+							table.insert(new, {
+								text = CARD_INDENT .. row,
+								color = if window.expires then "var(--oc-warn)" else accent,
+							})
+						end
+						local reset = window.reset
+						if reset == "soon" then
+							table.insert(new, { text = CARD_INDENT .. "resets soon", color = "var(--oc-mute)" })
+						elseif reset then
+							local row = "resets in " .. reset
+							local minutes, exact = countdown_minutes(reset)
+							local at = if minutes then clock_at(minutes, exact) else nil
+							if at then
+								row ..= " · " .. at
+							end
+							table.insert(new, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
+						end
+					end
+					done[made] = new
+					part = new
+				end
+				for _, row in part :: { Row } do
+					table.insert(rows, row)
+				end
+				if run.name then
+					runs_rows[group.key .. "/" .. (run.name :: string)] = #(part :: { Row })
+				end
+			end
+			-- the accounts not chosen: `bob · 5H 40% · 7D 17%`
+			local rest: { { name: string, windows: { Window } } } = {}
+			for _, window in (group.rest or {}) :: { Window } do
+				if window.lead or #rest == 0 then
+					table.insert(rest, { name = window.account or "", windows = {} })
+				end
+				table.insert(rest[#rest].windows, window)
+			end
+			for i, account in rest do
+				one_row(account.name, account.windows, "var(--oc-mute)", i == 1)
+			end
+			if folded > 0 then
+				local tone = tone_of(lowest)
 				table.insert(rows, {
-					text = CARD_INDENT .. row,
-					color = if window.expires then "var(--oc-warn)" else accent,
+					text = string.format(
+						"%s+%d more account%s · lowest %s",
+						if several then group.label .. " " else "",
+						folded,
+						if folded == 1 then "" else "s",
+						lowest_text
+					),
+					color = if fold_muted then "var(--oc-mute)" elseif tone == "ok" then accent else "var(--oc-win-" .. tone .. ")",
 				})
 			end
-			local reset = window.reset
-			if reset == "soon" then
-				table.insert(rows, { text = CARD_INDENT .. "resets soon", color = "var(--oc-mute)" })
-			elseif reset then
-				local row = "resets in " .. reset
-				local minutes, exact = countdown_minutes(reset)
-				local at = if minutes then clock_at(minutes, exact) else nil
-				if at then
-					row ..= " · " .. at
-				end
-				table.insert(rows, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
+		end
+		for _, other in model.others do
+			table.insert(rows, { text = other, color = "var(--oc-soft)" })
+		end
+		table.insert(rows, { text = hint, color = "var(--oc-hint)", rule = true })
+		card_runs = runs_rows
+		return rows
+	end
+	-- the accounts that can show in full, and those that can only get a row (the ones beside a picked account)
+	local accounts, others = 0, 0
+	for _, group in model.groups do
+		for _, window in group.windows do
+			if window.account and window.lead and group.rest == nil then
+				accounts += 1
+			end
+		end
+		for i, window in (group.rest or {}) :: { Window } do
+			if window.lead or i == 1 then
+				others += 1
 			end
 		end
 	end
-	for _, other in model.others do
-		table.insert(rows, { text = other, color = "var(--oc-soft)" })
+	local every = accounts + others
+	if fixed then
+		card_for, card_rows = key, if fixed == "all" then build(accounts, every) else build(0, 0)
+		return card_rows
 	end
-	table.insert(rows, { text = hint, color = "var(--oc-hint)", rule = true })
+	-- every account in full, unless that outgrows the limit: then as many as fit, the first accounts first; with
+	-- none in full still too tall, as many summary rows as fit. Fewer of either only shrinks the card, so halve.
+	local rows = build(accounts, every)
+	if #rows > limit then
+		rows = build(0, every)
+		if #rows <= limit then
+			local low, high = 1, accounts - 1
+			while low <= high do
+				local mid = (low + high) // 2
+				local trial = build(mid, every)
+				if #trial <= limit then
+					rows, low = trial, mid + 1
+				else
+					high = mid - 1
+				end
+			end
+		else
+			rows = build(0, 0)
+			local low, high = 1, every - 1
+			while low <= high do
+				local mid = (low + high) // 2
+				local trial = build(0, mid)
+				if #trial <= limit then
+					rows, low = trial, mid + 1
+				else
+					high = mid - 1
+				end
+			end
+		end
+	end
 	card_for = key
 	card_rows = rows
 	return rows
@@ -1475,11 +2053,9 @@ end
 local CARD_CSS = [==[
 /* the card: the line's facts spelled out over it, a row each, in a glass panel with a title bar; one gradient,
    row by row, colors the text, and each window's row sits on a meter with a lit tip */
-$HOST:hover::after {
+$TARGET {
 	content: "$CONTENT";
-	position: absolute;
-	left: 0;
-	bottom: calc(100% + 8px);
+	$PLACE
 	padding: 5px 12px 9px;
 	border-radius: 12px;
 	white-space: pre;
@@ -1499,11 +2075,7 @@ $HOST:hover::after {
 		0 6px 14px -8px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.55)),
 		inset 0 1px 0 var(--glass-hi);
 	pointer-events: none;
-	transform-origin: 16px 100%;
-	/* after a beat: it rises into place and its meters fill */
-	animation:
-		omp-usage-card 0.28s var(--out) 0.35s both,
-		omp-usage-fill 0.7s var(--out) 0.4s both;
+	$MOTION
 	--oc-head: var(--t1);
 	--oc-win-ok: var(--t1);
 	--oc-win-warn: var(--warn);
@@ -1514,6 +2086,11 @@ $HOST:hover::after {
 	--oc-track: color-mix(in srgb, var(--t1) 10%, transparent);
 	--oc-hint: light-dark(var(--t3), color-mix(in srgb, var(--t3) 60%, var(--t4)));
 }
+$KEYFRAMES]==]
+
+-- The card's rise and fill. Keyframe names are global, so only the composer's card brings them: the preview's
+-- own (its meters) would replace the composer's.
+local CARD_KEYFRAMES = [==[
 @keyframes omp-usage-card {
 	from { opacity: 0; transform: translateY(5px) scale(0.97); }
 	to { opacity: 1; transform: none; }
@@ -1524,7 +2101,9 @@ $HOST:hover::after {
 }
 ]==]
 
-local function card_css(rows: { Row }): string
+-- The card's sheet for its rows. By default it is the hover target's `::after` over the line, rising into place
+-- after a beat; `target` (the settings panel's preview) draws the same card, still, on another element.
+local function card_css(rows: { Row }, target: string?): string
 	local width = CARD_MIN
 	for _, row in rows do
 		local n = glyph_count(row.text)
@@ -1620,13 +2199,18 @@ local function card_css(rows: { Row }): string
 		"100% 100%",
 		"padding-box"
 	)
+	local sizes_css = table.concat(sizes, ", ")
 	return fill(CARD_CSS, {
-		HOST = host(nil),
+		TARGET = target or host(nil) .. ":hover::after",
+		PLACE = if target then "display: block;" else "position: absolute;\n\tleft: 0;\n\tbottom: calc(100% + 8px);",
+		MOTION = if target
+			then ""
+			else "transform-origin: 16px 100%;\n\t/* after a beat: it rises into place and its meters fill */\n\tanimation:\n\t\tomp-usage-card 0.28s var(--out) 0.35s both,\n\t\tomp-usage-fill 0.7s var(--out) 0.4s both;",
+		KEYFRAMES = if target then "" else fill(CARD_KEYFRAMES, { FROM_SIZES = table.concat(from_sizes, ", "), SIZES = sizes_css }),
 		CONTENT = table.concat(lines, "\\A "),
 		IMAGES = table.concat(images, ", "),
 		POSITIONS = table.concat(positions, ", "),
-		SIZES = table.concat(sizes, ", "),
-		FROM_SIZES = table.concat(from_sizes, ", "),
+		SIZES = sizes_css,
 		ORIGINS = table.concat(origins, ", "),
 		CLIPS = table.concat(clips, ", "),
 	})
@@ -1749,7 +2333,7 @@ local function pulse_css(line: Line, p: Pulse): string
 		)
 	end
 	return fill(PULSE_CSS, {
-		METER = METER,
+		METER = meter(),
 		REVEAL = "omp-usage-reveal-" .. tostring(p.seq), -- a new name per change restarts the animation
 		RUN = "omp-usage-run-" .. tostring(p.seq),
 		DURATION = tostring(PULSE_MS) .. "ms",
@@ -1762,7 +2346,7 @@ local function sheet(model: Model, settings: Settings, p: Pulse?, hint: string):
 		return ""
 	end
 	local line = line_of(model)
-	local css = line_css(line, model, settings) .. card_css(card(model, hint)) .. STILL_CSS
+	local css = line_css(line, model, settings) .. card_css(card(model, hint, settings.card_rows)) .. STILL_CSS
 	-- Only while it runs: a sheet rewritten later (a countdown tick) must not replay it.
 	if p and #line.bars > 0 and tern.now() < p.until_ms then
 		css ..= pulse_css(line, p)
@@ -1778,7 +2362,7 @@ local function hide_css(ids: { string }): string
 	end
 	local selectors: { string } = {}
 	for _, id in ids do
-		table.insert(selectors, ".tn-pane.on [data-role='omp.composer.bar'] [data-id=" .. css_string(id) .. "]")
+		table.insert(selectors, line_pane .. " [data-role='omp.composer.bar'] [data-id=" .. css_string(id) .. "]")
 	end
 	return table.concat(selectors, ",\n") .. " {\n\tdisplay: none !important;\n}\n"
 end
@@ -1797,6 +2381,7 @@ local PANEL_KEYS = "ctrl+alt+u"
 -- the panel's preview of the line is drawn from.
 local panel_pane: number? = nil
 local sync_panel: (cx: WindowCx, force: boolean, settings: Settings?, cache: Cache?) -> ()
+local flush_panel: (cx: WindowCx) -> ()
 local last_dock: Dock? = nil
 
 -- A chord as the keymap spells it (`ctrl+alt+u`) for people (`Ctrl+Alt+U`); a sequence's steps are spaced.
@@ -1844,8 +2429,8 @@ local function shortcut(cx: WindowCx): string?
 end
 
 -- The card's last row: how to open the settings.
-local function settings_hint(cx: WindowCx): string
-	return "settings · " .. (shortcut(cx) or "omp Usage in the palette")
+local function settings_hint(keys: string?): string
+	return "settings · " .. (keys or "omp Usage in the palette")
 end
 
 local refresh: (cx: WindowCx) -> ()
@@ -1904,10 +2489,10 @@ local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: 
 	end
 	last_seen[pane] = { source = model.source, values = values }
 	last_dock = dock
-	local hint = settings_hint(cx)
+	local hint = settings_hint(shortcut(cx))
 	local running = if pulse and tern.now() < pulse.until_ms then pulse.seq else 0
 	local hidden = table.concat(dock.hide, "\n")
-	local key = table.concat({ model.signature, colors_key(settings), hint, tostring(running), hidden }, "\n")
+	local key = table.concat({ model.signature, colors_key(settings), hint, tostring(running), hidden, line_pane }, "\n")
 	if key ~= sheet_key then
 		sheet_key = key
 		install(hide_css(dock.hide) .. sheet(model, settings, pulse, hint))
@@ -1929,11 +2514,24 @@ local function some_agent(cx: WindowCx, tab: number?): number?
 	return found
 end
 
+-- The agent panes in tab `tab`.
+local function agents_in(cx: WindowCx, tab: number?): { number }
+	local found: { number } = {}
+	for _, info in cx.session:panes() do
+		if info.kind == "agent" and info.tab == tab then
+			table.insert(found, info.pane)
+		end
+	end
+	return found
+end
+
 -- Shows the focused agent's usage; a focused non-agent pane keeps the last line (no composer shows it there),
--- but while the settings panel has focus the line it last showed follows the settings, for the panel's preview.
+-- but while the settings panel has focus the line it last showed follows the settings, for the panel's preview,
+-- and is drawn on the agent pane beside the panel when that is its tab's only one (see `line_pane`).
 -- Then redraws the panel if what it shows changed.
 refresh = function(cx: WindowCx)
 	local target: number? = nil
+	local scope = FOCUSED_PANE
 	local pane = cx.session:focused()
 	if pane ~= nil then
 		local info = cx.session:pane(pane)
@@ -1941,17 +2539,28 @@ refresh = function(cx: WindowCx)
 			target = pane
 		elseif info and pane == panel_pane then
 			target = shown_pane or some_agent(cx, info.tab)
+			local beside = agents_in(cx, info.tab)
+			if #beside == 1 and beside[1] == target then
+				scope = ".tn-pane.agent"
+			end
 		end
 	end
+	if scope ~= line_pane and target == nil then
+		target = shown_pane -- redraw the last line in its usual place, the focused pane
+	end
+	line_pane = scope
 	if target == nil and panel_pane == nil then
 		return
 	end
 	local settings = load_settings()
+	local raw = cache_raw
 	local cache = read_cache(now_ms())
 	if target ~= nil then
 		show_pane(cx, target :: number, settings, cache)
 	end
-	if panel_pane ~= nil then
+	-- A poll that just decoded a rewritten cache (the extension's, once a minute; tens of ms for a big one) has
+	-- spent much of its timer's 50ms: the panel's redraw waits for the next poll.
+	if panel_pane ~= nil and cache_raw == raw then
 		sync_panel(cx, false, settings, cache)
 	end
 end
@@ -2034,6 +2643,37 @@ local function order_summary(providers: { Provider }): string
 	return table.concat(labels, ", ")
 end
 
+-- The providers with several accounts, in order.
+local function with_accounts(providers: { Provider }): { Provider }
+	local list: { Provider } = {}
+	for _, provider in providers do
+		if #provider.accounts > 1 then
+			table.insert(list, provider)
+		end
+	end
+	return list
+end
+
+-- What a provider's accounts show, for the menus: `only alice`, `all: bob, alice` in their order, or how many
+-- are on when there are many or some are switched off.
+local function accounts_summary(settings: Settings, provider: Provider): string
+	local chosen = chosen_account(settings, provider.id, provider.accounts)
+	if chosen then
+		return "only " .. chosen
+	elseif settings.account[provider.id] == COMBINED then
+		return "combined"
+	elseif settings.account[provider.id] == COMBINED_PLANS then
+		return "combined by plan"
+	end
+	local shown = shown_accounts(settings, provider)
+	if #shown < #provider.accounts then
+		return string.format("%d of %d on", #shown, #provider.accounts)
+	elseif #shown > 3 then
+		return string.format("all %d", #shown)
+	end
+	return "all: " .. table.concat(shown, ", ")
+end
+
 local function menu_items(settings: Settings, providers: { Provider }, keys: string?): { PickItem }
 	local details = mode_details(settings, providers)
 	local items: { PickItem } = {
@@ -2058,6 +2698,17 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 	table.insert(items, { label = "Reorder providers…", detail = order_summary(providers), group = "Providers", pick = "reorder" })
 	table.insert(items, { label = "Provider colors…", detail = "presets, alternatives or your own", group = "Providers", pick = "colors" })
 	table.insert(items, { label = "Provider windows…", detail = "which of each provider's windows show", group = "Providers", pick = "windows" })
+	-- only with a provider signed in more than once
+	local several = with_accounts(providers)
+	if #several > 0 then
+		table.insert(items, {
+			label = "Provider accounts…",
+			detail = if #several == 1 then several[1].label .. ", " .. accounts_summary(settings, several[1]) else "all of a provider's accounts, combined, or one",
+			group = "Providers",
+			pick = "accounts",
+		})
+	end
+	table.insert(items, { label = "Card height…", detail = string.format("%d rows; past it, accounts sum up, then fold", settings.card_rows), group = "Card", pick = "card-rows" })
 	table.insert(items, { label = "Check for updates…", detail = "fetch this clone's branch and offer what's new", group = "Updates", icon = "download", pick = "update" })
 	local every = update.interval()
 	table.insert(items, {
@@ -2188,7 +2839,8 @@ local function toggle_window(id: string, label: string)
 	store.set(KV_HIDDEN, hidden)
 end
 
-local function move_provider(id: string, how: string)
+-- Moves provider `id` (`how`: see `moved`).
+local function move_provider(id: string, how: string | number)
 	local settings = load_settings()
 	local shown: { string } = {}
 	for _, provider in providers_in_order(settings) do
@@ -2197,9 +2849,61 @@ local function move_provider(id: string, how: string)
 	store.set(KV_ORDER, moved(settings.order, shown, id, how))
 end
 
+-- The provider on offer as `id`.
+local function offered(id: string): Provider?
+	for _, provider in store.providers() do
+		if provider.id == id then
+			return provider
+		end
+	end
+	return nil
+end
+
+-- Shows only account `name` of provider `id` on the line and in the card, its accounts combined (COMBINED, or by plan,
+-- COMBINED_PLANS), or ("") every account again.
+local function choose_account(id: string, name: string)
+	local chosen = load_settings().account
+	if name == "" then
+		chosen[id] = nil
+	else
+		chosen[id] = name
+	end
+	store.set(KV_ACCOUNT, chosen)
+end
+
+-- Switches account `name` of provider `id` off (out of the line and the card) or on again. The account picked to
+-- show alone can't stay picked while it is off, so switching it off shows the others again.
+local function toggle_account(id: string, name: string)
+	local settings = load_settings()
+	local list = toggled(settings.account_hidden[id] or {}, name)
+	if #list > 0 then
+		settings.account_hidden[id] = list
+	else
+		settings.account_hidden[id] = nil
+	end
+	store.set(KV_ACCOUNT_HIDDEN, settings.account_hidden)
+	if settings.account[id] == name and table.find(list, name) then
+		choose_account(id, "")
+	end
+end
+
+-- Moves account `name` of provider `id` among its accounts (`how`: see `moved`).
+local function move_account(id: string, name: string, how: string | number)
+	local provider = offered(id)
+	if provider == nil then
+		return
+	end
+	local orders = load_settings().account_order
+	local order = orders[id] or {}
+	orders[id] = moved(order, accounts_in_order((provider :: Provider).accounts, order), name, how)
+	store.set(KV_ACCOUNT_ORDER, orders)
+end
+
+-- After the user changed a setting: redraws the line and the panel at once.
 local function after_change(cx: WindowCx?)
 	if cx then
 		refresh(cx)
+		flush_panel(cx)
 	end
 end
 
@@ -2303,7 +3007,7 @@ local function open_colors(cx: WindowCx)
 				return
 			end
 			local chosen = item :: any
-			open_color_choices(next_cx or cx, { id = chosen.id, label = chosen.name, line = "", resets = {}, windows = {} })
+			open_color_choices(next_cx or cx, { id = chosen.id, label = chosen.name, line = "", resets = {}, windows = {}, accounts = {} })
 		end)
 end
 
@@ -2380,6 +3084,143 @@ local function open_windows(cx: WindowCx)
 		end)
 end
 
+-- A provider's accounts in the pickers: every account switched on or one on the line and in the card (the list
+-- closes on a pick), or their order, a move at a time until Esc. With `switches`, which accounts are on instead,
+-- toggled one at a time until Esc.
+local open_account_order: (WindowCx, string) -> ()
+
+local function open_account_choices(cx: WindowCx, id: string, switches: boolean?)
+	local found = offered(id)
+	if found == nil or #(found :: Provider).accounts < 2 then
+		return
+	end
+	local provider = found :: Provider
+	local settings = load_settings()
+	local names = accounts_in_order(provider.accounts, settings.account_order[id])
+	-- an account's windows: `7D 68% · FABLE 7D 45%`
+	local function left(name: string): string
+		local parts: { string } = {}
+		for _, window in provider.windows do
+			local owner, bare = account_of(window.label, provider.accounts)
+			if owner == name then
+				table.insert(parts, string.upper(bare :: string) .. " " .. tostring(window.pct) .. "%")
+			end
+		end
+		return table.concat(parts, " · ")
+	end
+	if switches then
+		local items: { PickItem } = {}
+		for _, name in names do
+			table.insert(items, { label = name, detail = left(name), current = not account_off(settings, id, name), name = name })
+		end
+		cx:pick({ items = items, placeholder = provider.label .. ": which accounts show? Esc when done", action = "toggle" })
+			:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+				if item == nil then
+					return
+				end
+				toggle_account(id, (item :: any).name)
+				local cx2 = next_cx or cx
+				after_change(cx2)
+				open_account_choices(cx2, id, true)
+			end)
+		return
+	end
+	local shown = shown_accounts(settings, provider)
+	local chosen = chosen_account(settings, id, provider.accounts)
+	local together = if chosen == nil then settings.account[id] else nil
+	local items: { PickItem } = {
+		{ label = "All accounts", detail = string.format("%d accounts, one after another", #shown), group = "Show", current = chosen == nil and together ~= COMBINED and together ~= COMBINED_PLANS, pick = "show", name = "" },
+		{ label = "Combined", detail = "one set of windows, shares averaged", group = "Show", current = together == COMBINED, pick = "show", name = COMBINED },
+		{ label = "Combined by plan", detail = "same windows together, shares averaged", group = "Show", current = together == COMBINED_PLANS, pick = "show", name = COMBINED_PLANS },
+	}
+	for _, name in shown do
+		table.insert(items, { label = name, detail = left(name), group = "Show", current = chosen == name, pick = "show", name = name })
+	end
+	table.insert(items, {
+		label = "Switch accounts on or off…",
+		detail = string.format("%d of %d on", #shown, #names),
+		group = "Accounts",
+		icon = "check",
+		pick = "switches",
+	})
+	table.insert(items, { label = "Reorder accounts…", detail = table.concat(names, ", "), group = "Accounts", icon = "list", pick = "order" })
+	cx:pick({ items = items, placeholder = provider.label .. ": show which accounts?", icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item == nil then
+				return
+			end
+			local choice = item :: any
+			local cx2 = next_cx or cx
+			if choice.pick == "order" then
+				open_account_order(cx2, id)
+				return
+			elseif choice.pick == "switches" then
+				open_account_choices(cx2, id, true)
+				return
+			end
+			choose_account(id, choice.name)
+			after_change(cx2)
+		end)
+end
+
+open_account_order = function(cx: WindowCx, id: string)
+	local found = offered(id)
+	if found == nil then
+		return
+	end
+	local provider = found :: Provider
+	local names = accounts_in_order(provider.accounts, load_settings().account_order[id])
+	local items: { PickItem } = {}
+	for i, name in names do
+		table.insert(items, { label = name, detail = string.format("%d of %d", i, #names), pick = "account", name = name })
+	end
+	cx:pick({ items = items, placeholder = provider.label .. ": move which account? Esc when done", icon = "list" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item == nil then
+				return
+			end
+			local name = (item :: any).name :: string
+			local moves = move_items(table.find(names, name) or 1, #names)
+			if #moves == 0 then
+				return
+			end
+			local cx2 = next_cx or cx
+			cx2:pick({ items = moves, placeholder = "Move " .. name, icon = "list" })
+				:next(function(choice: PickItem?, _err2: string?, last_cx: WindowCx?)
+					if choice == nil then
+						return
+					end
+					move_account(id, name, (choice :: any).pick)
+					local cx3 = last_cx or cx2
+					after_change(cx3)
+					open_account_order(cx3, id)
+				end)
+		end)
+end
+
+local function open_accounts(cx: WindowCx)
+	local settings = load_settings()
+	local several = with_accounts(providers_in_order(settings))
+	if #several == 0 then
+		cx:toast("info", "No provider has several accounts", "They come from omp's usage cache: focus an omp pane")
+		return
+	elseif #several == 1 then
+		open_account_choices(cx, several[1].id)
+		return
+	end
+	local items: { PickItem } = {}
+	for _, provider in several do
+		table.insert(items, { label = provider.label, detail = accounts_summary(settings, provider), id = provider.id })
+	end
+	cx:pick({ items = items, placeholder = "Accounts of which provider?", icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item == nil then
+				return
+			end
+			open_account_choices(next_cx or cx, (item :: any).id)
+		end)
+end
+
 -- The settings panel: a canvas of buttons beside the pane it was opened from, one per window (opening it again
 -- shows the one there is). It redraws when a setting changes, from it or from the pickers, and as the line it
 -- previews changes. Its clicks arrive as `canvas_action` events. Tern keeps canvases across reloads, so a
@@ -2448,43 +3289,52 @@ $P .oup-note {
 	font: 400 11.5px/14px var(--sans);
 	color: var(--t3);
 }
-/* the line as the composer draws it, a window at a time so it wraps between windows as the composer's does, on
-   a stage lit from its corner in the provider's color */
+/* what the composer shows, drawn as the composer draws it: the card (open, as a hover opens it) over the line,
+   8px apart as there, on a stage lit from its corner in the card's glow; a card wider than the panel is cut */
 $P .oup-stage {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 10px 26px;
-	min-height: 48px;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	overflow: hidden;
+	/* its height held (see `build.preview`) counts the padding; spare room goes over the card, which rises from
+	   the line as on the composer. The scroll never anchors in here: a card that changes height would move the
+	   panel with it */
+	box-sizing: border-box;
+	justify-content: flex-end;
+	overflow-anchor: none;
 	padding: 14px 16px;
 	border-radius: 12px;
 	background-color: var(--code-bg);
-	background-image: radial-gradient(120% 160% at 0% 0%, rgb(from var(--ou-stage) r g b / 16%), transparent 62%);
+	background-image: radial-gradient(120% 160% at 0% 0%, rgb(from var(--ou-glow) r g b / 16%), transparent 62%);
 	box-shadow: 0 0 0 1px var(--l2), inset 0 1px 0 var(--glass-hi);
+	--ou-glow: var(--accent);
 }
-$P .oup-pv {
+$P .oup-card {
 	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 14px;
-	min-width: 0;
 }
-$P .oup-chip {
-	max-width: 100%;
+/* the composer's line box, font and colors at rest (see LINE_CSS), its bars' lit tips over it as there (see
+   TIPS_CSS; `build.preview` sets them) */
+$P .oup-line {
+	position: relative;
+	align-self: stretch;
+	height: 15px;
 	overflow: hidden;
-	white-space: pre;
-	font: 500 11px/16px var(--mono);
+	white-space: pre-wrap;
+	text-overflow: ellipsis;
+	font: 500 10px/15px var(--mono);
 	font-variant-numeric: tabular-nums;
 	color: transparent;
 	background-repeat: no-repeat;
 	background-clip: text;
-	--ou-lbl: var(--t2);
-	--ou-sep: var(--t3);
-	--ou-num-ok: var(--t1);
+	--ou-lbl: var(--t3);
+	--ou-sep: var(--t4);
+	--ou-num-ok: var(--t2);
 	--ou-num-warn: var(--warn);
 	--ou-num-bad: var(--bad);
-	--ou-dim: var(--t3);
-	--ou-soft: var(--t2);
-	--ou-track: color-mix(in srgb, var(--t1) 18%, transparent);
+	--ou-dim: var(--t4);
+	--ou-soft: var(--t3);
+	--ou-track: color-mix(in srgb, var(--t1) 13%, transparent);
 }
 $P .oup-empty {
 	font: 400 12px/18px var(--sans);
@@ -2539,8 +3389,8 @@ $P .oup-opt-d {
 	font: 400 11.5px/15px var(--sans);
 	color: var(--t3);
 }
-/* the providers, a row each in the line's order: index, swatch and label, what is left, then the Selected switch
-   and the moves, which drop under the rest when the pane is narrow */
+/* the providers, a row each in the line's order: grip, index, swatch and label, what is left, then the Selected
+   switch, which drops under the rest when the pane is narrow */
 $P .oup-rows {
 	display: flex;
 	flex-direction: column;
@@ -2640,13 +3490,14 @@ $P .oup-v[data-low='bad'] {
 /* under Selected providers, the ones switched off fade: the line leaves them out */
 $P .oup-prow[data-off] .oup-swatch,
 $P .oup-prow[data-off] .oup-name,
-$P .oup-prow[data-off] .oup-sum {
+$P .oup-prow[data-off] .oup-sum,
+$P .oup-prow[data-off] .oup-aname {
 	opacity: 0.4;
 }
 $P .oup-switch {
 	position: relative;
 	flex: none;
-	margin-right: 10px;
+	margin-right: 4px;
 	width: 30px;
 	height: 18px;
 	border-radius: 9px;
@@ -2690,32 +3541,227 @@ $P .oup-rows[data-idle] .oup-switch {
 $P .oup-rows[data-idle] .oup-switch:hover {
 	opacity: 1;
 }
-$P .oup-mv {
+/* reordering, by pick and place: a grip picks a row up; the row lifts, ringed (in the accent, an account in its
+   provider's color) and its grip turns into a cross that puts it back; every gap it can go to opens as a slot, a
+   line with its name, and a click on one puts it there */
+$P .oup-grip {
 	display: flex;
 	flex: none;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
+	width: 20px;
 	height: 26px;
-	border-radius: 7px;
-	font: 600 9.5px/12px var(--mono);
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--t3);
+	border-radius: 6px;
+	color: var(--t4);
 	cursor: pointer;
 	transition:
 		color 0.14s var(--ease),
 		background-color 0.14s var(--ease);
 }
-$P .oup-mv:hover {
+$P .oup-grip:hover {
 	color: var(--t1);
 	background-color: var(--l2);
 }
-$P .oup-gap {
-	visibility: hidden;
+$P .oup-prow[data-moving] {
+	border-radius: 10px;
+	background-color: rgb(from var(--accent) r g b / 7%);
+	box-shadow:
+		0 0 0 1px rgb(from var(--accent) r g b / 55%),
+		0 14px 28px -18px rgb(from var(--accent) r g b / 90%);
 }
-$P .oup-top {
-	width: 34px;
+$P .oup-arow[data-moving] {
+	border-radius: 8px;
+	background-color: rgb(from var(--pa) r g b / 9%);
+	box-shadow:
+		0 0 0 1px rgb(from var(--pa) r g b / 55%),
+		0 12px 24px -16px rgb(from var(--pa) r g b / 90%);
+}
+$P .oup-prow[data-moving] > .oup-who > .oup-grip {
+	color: var(--accent);
+}
+$P .oup-arow[data-moving] > .oup-grip {
+	color: rgb(from var(--pa) r g b);
+}
+$P .oup-slot {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 24px;
+	padding: 0 8px;
+	border-radius: 7px;
+	font: 500 10px/14px var(--mono);
+	color: rgb(from var(--slot) r g b);
+	opacity: 0.7;
+	cursor: pointer;
+	transition:
+		opacity 0.14s var(--ease),
+		background-color 0.14s var(--ease);
+	--slot: var(--accent);
+}
+$P .oup-accts .oup-slot {
+	--slot: var(--pa);
+}
+$P .oup-slot:hover {
+	opacity: 1;
+	background-color: rgb(from var(--slot) r g b / 12%);
+}
+$P .oup-slot-line {
+	flex: 1;
+	height: 1px;
+	background-color: rgb(from var(--slot) r g b / 60%);
+}
+/* a provider with several accounts: where its windows would be, one quiet chip saying what the line and card show
+   (`all 8 accounts`), or, with one account picked, a button in the provider's color (`only dev.ops ✕`) that shows
+   them all again; under it, on a guide from its swatch, a row per account in the line's order: grip, name (one
+   column, so the windows line up; a click picks it), windows and its switch */
+$P .oup-sum-pick {
+	flex: 1 1 0;
+	min-width: 0;
+}
+$P .oup-pick {
+	display: flex;
+	flex: 0 1 auto;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	max-width: 100%;
+	height: 22px;
+	padding: 0 9px;
+	border-radius: 11px;
+	white-space: nowrap;
+	font: 500 10.5px/22px var(--mono);
+	color: var(--t3);
+	box-shadow: 0 0 0 1px var(--l2);
+}
+$P .oup-pick-t {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+$P button.oup-pick {
+	color: rgb(from var(--pa) r g b);
+	background-color: rgb(from var(--pa) r g b / 12%);
+	box-shadow: 0 0 0 1px rgb(from var(--pa) r g b / 50%);
+	cursor: pointer;
+	transition: background-color 0.14s var(--ease);
+}
+$P button.oup-pick:hover {
+	background-color: rgb(from var(--pa) r g b / 22%);
+}
+/* beside `all 8 accounts`, the button that combines them: quiet until pointed at */
+$P .oup-picks {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+$P button.oup-combine {
+	color: var(--t3);
+	background-color: transparent;
+	box-shadow: 0 0 0 1px var(--l2);
+}
+$P button.oup-combine:hover {
+	color: rgb(from var(--pa) r g b);
+	background-color: rgb(from var(--pa) r g b / 12%);
+	box-shadow: 0 0 0 1px rgb(from var(--pa) r g b / 50%);
+}
+$P .oup-accts {
+	display: flex;
+	flex: 0 0 calc(100% - 64px);
+	flex-direction: column;
+	margin: 0 0 6px 64px;
+	padding-left: 8px;
+	border-left: 1px solid var(--l2);
+}
+$P .oup-arow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 10px;
+	min-height: 30px;
+	padding: 0 2px 0 2px;
+}
+$P .oup-aname {
+	display: flex;
+	flex: 0 1 172px;
+	align-items: center;
+	gap: 6px;
+	min-width: 64px;
+	margin-left: -6px;
+	padding: 2px 6px;
+	border-radius: 6px;
+	font: 500 11.5px/16px var(--mono);
+	color: rgb(from var(--pa) r g b);
+	transition:
+		opacity 0.18s var(--ease),
+		background-color 0.14s var(--ease);
+}
+$P .oup-aname-t {
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+$P button.oup-aname {
+	cursor: pointer;
+}
+$P button.oup-aname:hover {
+	background-color: var(--l2);
+}
+/* the account picked to show alone: its row tinted, its name bold and tagged */
+$P .oup-arow[data-picked] {
+	border-radius: 8px;
+	background-color: rgb(from var(--pa) r g b / 7%);
+}
+$P .oup-arow[data-picked] .oup-aname {
+	font-weight: 600;
+}
+$P .oup-only {
+	flex: none;
+	padding: 0 5px;
+	border-radius: 4px;
+	font: 600 9px/14px var(--mono);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: rgb(from var(--pa) r g b);
+	background-color: rgb(from var(--pa) r g b / 16%);
+	box-shadow: 0 0 0 1px rgb(from var(--pa) r g b / 45%);
+}
+/* combined: which group an account went into (`5H`, `no 5H`), at the end of its windows, so the tags
+   line up in a column */
+$P .oup-group {
+	flex: none;
+	margin-left: auto;
+	padding: 0 6px;
+	border-radius: 4px;
+	font: 500 10px/16px var(--mono);
+	color: var(--t3);
+	box-shadow: 0 0 0 1px var(--l2);
+}
+$P .oup-arow[data-off] .oup-aname,
+$P .oup-arow[data-off] .oup-sum,
+$P .oup-arow[data-hidden] .oup-aname,
+$P .oup-arow[data-hidden] .oup-sum {
+	opacity: 0.4;
+}
+/* switched off: out of the line and the card */
+$P .oup-arow[data-hidden] .oup-aname-t {
+	text-decoration-line: line-through;
+}
+/* picked up, a row shows in full, whatever else it is */
+$P .oup-arow[data-moving] .oup-aname,
+$P .oup-arow[data-moving] .oup-sum {
+	opacity: 1;
+}
+/* an account's switch is always live, whatever the mode */
+$P .oup-rows[data-idle] .oup-aswitch {
+	opacity: 1;
+}
+/* ten accounts of one provider make a column of switches: on, they take its color at half strength, so a row
+   picked up or a share running low still stands out */
+$P .oup-aswitch[data-on] {
+	background-image: none;
+	background-color: rgb(from var(--pa) r g b / 45%);
 }
 /* each provider's colors: its preset, the alternatives and its own, the one in use ringed; the swatches drop
    under the label when the pane is narrow */
@@ -2884,6 +3930,19 @@ $P .oup-pill[data-on] {
 	background-color: rgb(from var(--accent) r g b / 16%);
 	box-shadow: 0 0 0 1px rgb(from var(--accent) r g b / 55%);
 }
+/* under the Preview: the card's height limit, its note on a line of its own, and the warning while the card
+   outgrows it */
+$P .oup-limit {
+	margin-top: 12px;
+}
+$P .oup-limit .oup-note {
+	flex-basis: 100%;
+}
+$P .oup-over {
+	margin-top: 10px;
+	font: 400 11.5px/15px var(--sans);
+	color: var(--warn);
+}
 $P .oup-cname {
 	overflow: hidden;
 	white-space: nowrap;
@@ -2983,43 +4042,174 @@ local function section(key: string, title: string, note: string?, body: { Node }
 	return ui.el("section", { key = key, class = "oup-sec" }, children)
 end
 
--- The line as it shows now, painted as the composer paints it: a window at a time (the provider's label with its
--- first), so it wraps between windows as the composer's does.
-local function preview_section(settings: Settings, preview: Model, rules: { string }): Node
-	local providers: { Node } = {}
-	local several = #preview.groups > 1
-	local n = 0
-	for g, group in preview.groups do
-		local palette = palette_for(settings, group.id, group.label)
-		local chips: { Node } = {}
-		for w, window in group.windows do
-			local part: Group = { key = group.key, id = group.id, label = if w == 1 then group.label else "", windows = { window }, resets = group.resets }
-			local line = line_of({ groups = { part }, others = {}, source = preview.source, title = "", signature = "" }, several)
-			n += 1
-			table.insert(chips, ui.el("div", { key = "w" .. w, class = "oup-chip", text = line.text, attrs = { ["data-ou-chip"] = n } }))
-			table.insert(
-				rules,
-				string.format(
-					"%s .oup-chip[data-ou-chip='%d'] {\n\t--ou-g1-a: %s;\n\t--ou-g1-b: %s;\n\tbackground-image: %s;\n}",
-					PANEL,
-					n,
-					palette.a,
-					palette.b or palette.a,
-					line_paint(line)
+-- The panel's sections and the account chip, as fields of one table: each local of the main chunk takes one of
+-- Luau's 200 registers (constants aside), and the chunk is close to them.
+local build = {}
+-- `build.most_rows`' last result and what it was for
+build.most_for = ""
+build.most = 0
+
+-- The most rows the card can get with the usage last fetched, whatever is clicked in the panel. The card's
+-- height doesn't only grow with what it shows (hiding a window can make room for another account in full), so
+-- with nothing hidden and every account on, a card counts as tall as it would be without the limit, up to the
+-- limit, or as it is with everything summed up and folded, if that still outgrows it: picked accounts stay in
+-- full, so the most is with each provider's account picked that takes the most rows, all at once. That for the
+-- focused agent's provider and for every provider, with no account picked, each picked alone, and those picks
+-- together (combined accounts only ever take fewer rows). The order of providers and accounts changes neither.
+-- It is worked out again only when the limit or the shape of the cards with no account picked changes (their
+-- providers, accounts, windows and the rows under them; not what is left, which the extension rewrites every
+-- minute), and the card's memo is put back after, so the composer's and the preview's rows stay the same rows
+-- (their clock times included).
+function build.most_rows(settings: Settings, providers: { Provider }, cache: Cache?, hint: string): number
+	local limit = settings.card_rows
+	local function model_for(mode: string, picks: { [string]: string }): Model
+		local trial = table.clone(settings)
+		trial.mode, trial.hidden, trial.account_hidden, trial.account = mode, {}, {}, picks
+		return build_model(trial, last_dock or NO_DOCK, cache)
+	end
+	local bases: { [string]: Model } = { current = model_for("current", {}), all = model_for("all", {}) }
+	local shape: { string } = { hint, tostring(limit) }
+	for _, base in { bases.current, bases.all } do
+		table.insert(shape, base.title .. "#" .. tostring(#base.others))
+		for _, group in base.groups do
+			table.insert(shape, string.format("%s=%s r%d", group.key, group.label, #(group.resets or {})))
+			for _, window in group.windows do
+				table.insert(
+					shape,
+					string.format("%s|%s|%s|%s", window.label, tostring(window.saved), tostring(window.expires ~= nil), tostring(window.reset ~= nil))
 				)
-			)
+			end
 		end
-		table.insert(providers, ui.el("div", { key = "g" .. g, class = "oup-pv" }, chips))
 	end
-	local glow = if #preview.groups == 1 then palette_for(settings, preview.groups[1].id, preview.groups[1].label).a else "var(--accent)"
-	table.insert(rules, string.format("%s .oup-stage {\n\t--ou-stage: %s;\n}", PANEL, glow))
-	if #providers == 0 then
-		table.insert(providers, ui.el("div", { class = "oup-empty", text = "Nothing to show yet. Focus an omp pane and its line appears here." }))
+	local key = table.concat(shape, "\n")
+	if key == build.most_for then
+		return build.most
 	end
-	return section("preview", "Line", "as the composer shows it", { ui.el("div", { class = "oup-stage" }, providers) })
+	local most = 0
+	local memo_for, memo_rows = card_for, card_rows
+	-- the card's rows with every account in full, after counting the state toward `most`: as many, up to the
+	-- limit; past it, the card sums accounts up, which only leaves it over the limit if summing up all of them
+	-- does. Also how many rows each account in full takes (see `card_runs`).
+	local function measure(model: Model): (number, { [string]: number })
+		if #model.groups == 0 and #model.others == 0 then
+			return 0, {}
+		end
+		local unlimited = #card(model, hint, limit, "all")
+		local runs = card_runs
+		most = math.max(most, math.min(unlimited, limit))
+		if unlimited > limit then
+			most = math.max(most, #card(model, hint, limit, "least"))
+		end
+		return unlimited, runs
+	end
+	for mode, base in bases do
+		-- a pick swaps an account's windows (two rows or more each) for a row per other account, so picks only
+		-- matter when the card already outgrows the limit; then the tallest card picks, for each provider it
+		-- shows with several accounts, the account that takes the most rows, all at once
+		local unlimited, runs = measure(base)
+		if unlimited <= limit then
+			continue
+		end
+		local tallest: { [string]: string } = {}
+		for _, provider in providers do
+			local best = -1
+			for _, name in provider.accounts do
+				local rows = runs[provider.id .. "/" .. name]
+				if rows and rows > best then
+					best, tallest[provider.id] = rows, name
+				end
+			end
+		end
+		if next(tallest) ~= nil then
+			measure(model_for(mode, tallest))
+		end
+	end
+	card_for, card_rows = memo_for, memo_rows
+	build.most_for, build.most = key, most
+	return most
 end
 
-local function show_section(settings: Settings, providers: { Provider }): Node
+-- What the composer shows, drawn by the composer's own code: its card open over the line, as a hover opens it,
+-- with the same rows, text, paint and fonts. The line keeps the composer's one-line box (`.oup-line`), so a
+-- window that doesn't fit wraps onto the line that is cut off here as it is there; the panel is seldom as wide
+-- as the composer, so the line can end a window sooner or later. The stage is as tall as the card can get with
+-- the usage last fetched (`most_rows`), so a click that changes the card leaves the rest of the panel, and the
+-- pointer over it, where they were. Under it, the card's height limit, and a warning while the card outgrows it.
+function build.preview(settings: Settings, preview: Model, rules: { string }, hint: string, providers: { Provider }, cache: Cache?): Node
+	local limit = settings.card_rows
+	local pills: { Node } = {}
+	for _, rows in CARD_ROWS do
+		local on = rows == limit
+		table.insert(pills, ui.el("button", {
+			class = "oup-pill",
+			text = tostring(rows),
+			actions = { click = "card-rows=" .. tostring(rows) },
+			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+		}))
+	end
+	local height = ui.el("div", { class = "oup-urow oup-limit" }, {
+		ui.el("span", { class = "oup-ulabel", text = "Card height, in rows" }),
+		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "How many rows the card may take" } }, pills),
+		ui.el("span", {
+			class = "oup-note",
+			text = "Past it, accounts sum up to a row each, then fold into one. A row is 18px: pick what your omp pane holds above the composer.",
+		}),
+	})
+	-- the stage's padding, the card (its rows and padding), the gap and the line: see `.oup-stage`, CARD_CSS
+	local most = build.most_rows(settings, providers, cache, hint)
+	if most > 0 then
+		table.insert(rules, string.format("%s .oup-stage {\n\tmin-height: %dpx;\n}", PANEL, 28 + most * CARD_ROW + 14 + 8 + 15))
+	end
+	if #preview.groups == 0 and #preview.others == 0 then
+		return section("preview", "Preview", "what the composer shows, its card open as on a hover", {
+			ui.el("div", { class = "oup-stage" }, {
+				ui.el("div", { class = "oup-empty", text = "Nothing to show. Focus an omp pane, or show a window below." }),
+			}),
+			height,
+		})
+	end
+	local line = line_of(preview)
+	table.insert(rules, palette_css(preview, settings, PANEL .. " .oup-stage"))
+	local rest = tips(line, 55)
+	table.insert(rules, string.format("%s .oup-line {\n\tbackground-image: %s;\n}", PANEL, line_paint(line)))
+	if #rest.images > 0 then
+		table.insert(
+			rules,
+			string.format(
+				"%s .oup-line::after {\n\tcontent: \"\";\n\tposition: absolute;\n\tleft: 0;\n\tright: 0;\n\ttop: 0;\n\theight: 13px;\n\tbackground-image: %s;\n\tbackground-position: %s;\n\tbackground-size: %s;\n\tbackground-repeat: no-repeat;\n\tpointer-events: none;\n}",
+				PANEL,
+				table.concat(rest.images, ", "),
+				table.concat(rest.positions, ", "),
+				table.concat(rest.sizes, ", ")
+			)
+		)
+	end
+	local rows = card(preview, hint, limit)
+	table.insert(rules, card_css(rows, PANEL .. " .oup-card::before"))
+	local children: { Node } = {
+		ui.el("div", { class = "oup-stage" }, {
+			ui.el("div", { class = "oup-card" }),
+			ui.el("div", { class = "oup-line", text = line.text }),
+		}),
+		height,
+	}
+	if #rows > limit then
+		table.insert(
+			children,
+			ui.el("div", {
+				class = "oup-over",
+				text = string.format(
+					"This card takes %d rows, more than %d: a picked account and the providers without accounts don't fold. A short pane cuts its top off; raise the limit, or show less.",
+					#rows,
+					limit
+				),
+			})
+		)
+	end
+	return section("preview", "Preview", "what the composer shows, its card open as on a hover", children)
+end
+
+function build.show(settings: Settings, providers: { Provider }): Node
 	local details = mode_details(settings, providers)
 	local options: { Node } = {}
 	for _, mode in MODES do
@@ -3044,11 +4234,12 @@ local function show_section(settings: Settings, providers: { Provider }): Node
 	return section("show", "Show", nil, { ui.el("div", { class = "oup-modes" }, options) })
 end
 
--- What a provider has left, by window: each a toggle that hides it from the line or shows it again.
-local function left_now(settings: Settings, provider: Provider): { Node }
+-- What a provider has left, by window (`windows`: its own, or one account's): each a toggle that hides it from
+-- the line or shows it again. An account's windows go by their labels without it, as its row names it.
+local function left_now(settings: Settings, provider: Provider, windows: { Window }): { Node }
 	local hidden = settings.hidden[provider.id] or {}
 	local nodes: { Node } = {}
-	for _, window in provider.windows do
+	for _, window in windows do
 		local tone = tone_of(window.pct)
 		local key = string.lower(window.label)
 		local off = table.find(hidden, key) ~= nil
@@ -3064,7 +4255,7 @@ local function left_now(settings: Settings, provider: Provider): { Node }
 					["data-off"] = if off then true else nil,
 				},
 			}, {
-				ui.el("span", { class = "oup-w", text = string.upper(window.label) }),
+				ui.el("span", { class = "oup-w", text = string.upper(window.bare or window.label) }),
 				ui.el("span", { class = "oup-v", text = tostring(window.pct) .. "%", attrs = { ["data-low"] = if tone ~= "ok" then tone else nil } }),
 			})
 		)
@@ -3075,34 +4266,216 @@ local function left_now(settings: Settings, provider: Provider): { Node }
 	return nodes
 end
 
-local function provider_row(settings: Settings, provider: Provider, i: number, n: number): Node
-	local on = table.find(settings.selected, provider.id) ~= nil
-	local function move(act: string, label: string, can: boolean, icon: string?, text: string?): Node
-		local class = if icon then "oup-mv" else "oup-mv oup-top"
-		if not can then
-			return ui.el("span", { class = class .. " oup-gap", attrs = { ["aria-hidden"] = "true" } })
+-- Reordering in the panel is pick and place (Tern's views have no drag): a row's grip picks it up, every gap it
+-- can go to opens as a slot, and a click on one puts it there. `moving` is what is picked up (a provider by id, or
+-- an account of provider `id` by name) until it is placed, put back with its grip, or another setting changes.
+type Moving = { kind: string, id: string, name: string? }
+local moving: Moving? = nil
+
+-- A row's grip (`grab=<what>`): picks it up, or, picked up, puts it back.
+local function grip(what: string, label: string, lifted: boolean): Node
+	return ui.el("button", {
+		class = "oup-grip",
+		actions = { click = "grab=" .. what },
+		attrs = {
+			["aria-label"] = if lifted then "Put " .. label .. " back" else "Pick up " .. label .. " to move it",
+			["aria-pressed"] = if lifted then "true" else "false",
+		},
+	}, { ui.node("icon", { name = if lifted then "x" else "grip" }) })
+end
+
+-- `rows` (one per item of `items`, ids or names in order) and, while `lifted` (one of them, called `label`) is picked
+-- up, a slot in every gap it can go to but its own: `place=<prefix><at>`, `at` as `moved` counts it.
+local function with_slots(items: { string }, rows: { Node }, lifted: string?, label: string, prefix: string): { Node }
+	if lifted == nil or not table.find(items, lifted :: string) then
+		return rows
+	end
+	local function slot(key: string, at: number): Node
+		return ui.el("button", {
+			key = key,
+			class = "oup-slot",
+			actions = { click = "place=" .. prefix .. tostring(at) },
+			attrs = { ["aria-label"] = "Move " .. label .. " here" },
+		}, {
+			ui.el("span", { class = "oup-slot-t", text = label .. " here" }),
+			ui.el("span", { class = "oup-slot-line" }),
+		})
+	end
+	local out: { Node } = {}
+	local passed = 0 -- items before this one, the lifted one aside
+	for i, item in items do
+		if item ~= lifted and items[i - 1] ~= lifted then
+			table.insert(out, slot("s-" .. tostring(i), passed + 1))
+		end
+		table.insert(out, rows[i])
+		if item ~= lifted then
+			passed += 1
+		end
+	end
+	if items[#items] ~= lifted then
+		table.insert(out, slot("s-end", passed + 1))
+	end
+	return out
+end
+
+-- Where a provider with several accounts would list its windows: one quiet chip saying what the line and card show
+-- (`shown`: the accounts switched on, in order), and a button for the next way to show them: `all 8 accounts` with
+-- `combine`; combined, `combined · 8 accounts ✕` with `by plan`; by plan, `by plan · 6 with 5H, 4 without ✕`
+-- with `all in one` (see `combined`); with one picked, `only dev.ops ✕`. The ✕ chips are buttons that
+-- show every account again. The accounts are picked on their rows (see `account_rows`).
+function build.account_chip(settings: Settings, provider: Provider, shown: { string }): Node
+	local chosen = chosen_account(settings, provider.id, provider.accounts)
+	local function clear(text: string, label: string): Node
+		return ui.el("button", {
+			class = "oup-pick",
+			actions = { click = "account=" .. provider.id .. "/" },
+			attrs = { ["aria-label"] = label },
+		}, {
+			ui.el("span", { class = "oup-pick-t", text = text }),
+			ui.node("icon", { name = "x" }),
+		})
+	end
+	local function with_button(chip: Node, text: string, act: string, label: string): Node
+		return ui.el("span", { class = "oup-picks" }, {
+			chip,
+			ui.el("button", {
+				class = "oup-pick oup-combine",
+				text = text,
+				actions = { click = act .. "=" .. provider.id },
+				attrs = { ["aria-label"] = label },
+			}),
+		})
+	end
+	if chosen then
+		return clear("only " .. (chosen :: string), "Only " .. (chosen :: string) .. " shows: show every " .. provider.label .. " account again")
+	end
+	local mode = settings.account[provider.id]
+	if #shown > 1 and (mode == COMBINED or mode == COMBINED_PLANS) then
+		-- the groups as the line and card have them (hidden windows left out)
+		local _, _, info = account_view(settings, provider.id, provider.accounts, shown_windows(settings, provider.id, provider.windows))
+		local chip = clear(if info then info.chip else "combined", provider.label .. "'s accounts show combined: show each account again")
+		if mode == COMBINED then
+			return with_button(chip, "by plan", "combine-plans", "Combine " .. provider.label .. "'s accounts by plan: the accounts with the same windows together")
+		end
+		return with_button(chip, "all in one", "combine", "Combine all of " .. provider.label .. "'s accounts in one set of windows")
+	end
+	local text = if #shown > 1
+		then string.format("all %d accounts", #shown)
+		elseif #shown == 1 then "only " .. shown[1] .. " is on"
+		else "every account is off"
+	local chip = ui.el("span", { class = "oup-pick" }, { ui.el("span", { class = "oup-pick-t", text = text }) })
+	if #shown < 2 then
+		return chip
+	end
+	return with_button(chip, "combine", "combine", "Combine " .. provider.label .. "'s accounts: one set of windows, each window's share their average")
+end
+
+-- Under a provider with several accounts, a row per account in the line's order: its grip, name, windows (each a
+-- toggle, as a provider's are) and a switch that takes it off the line and out of the card, or back. A click on
+-- an account's name shows only that account; on the picked one's, every account again. The picked row's name is
+-- lit and tagged `only`; the others fade (the card sums them up). Combined by plan, each row is tagged with its
+-- group (`5H`, `no 5H`; see `combined`). Switched off, a row fades, its name is struck through and can't be
+-- picked.
+local function account_rows(settings: Settings, provider: Provider, names: { string }): Node
+	local chosen = chosen_account(settings, provider.id, provider.accounts)
+	local lifted = if moving and moving.kind == "account" and moving.id == provider.id then moving.name else nil
+	local rows: { Node } = {}
+	local tags: { [string]: string } = {}
+	if chosen == nil and settings.account[provider.id] == COMBINED_PLANS then
+		local _, _, info = account_view(settings, provider.id, provider.accounts, shown_windows(settings, provider.id, provider.windows))
+		tags = if info then info.tags else {}
+	end
+	-- an account's name: a button that picks it (or, picked, shows all again), plain text while it is off
+	local function account_name(name: string, off: boolean): Node
+		local text = ui.el("span", { class = "oup-aname-t", text = name })
+		if off then
+			return ui.el("span", { class = "oup-aname" }, { text })
+		end
+		local picked = chosen == name
+		local children: { Node } = { text }
+		if picked then
+			table.insert(children, ui.el("span", { class = "oup-only", text = "only" }))
 		end
 		return ui.el("button", {
-			class = class,
-			text = text,
-			actions = { click = act .. "=" .. provider.id },
-			attrs = { ["aria-label"] = label },
-		}, if icon then { ui.node("icon", { name = icon }) } else nil)
+			class = "oup-aname",
+			actions = { click = "account=" .. provider.id .. "/" .. (if picked then "" else name) },
+			attrs = {
+				["aria-pressed"] = if picked then "true" else "false",
+				["aria-label"] = if picked then "Show every " .. provider.label .. " account again" else "Show only " .. provider.label .. " " .. name,
+			},
+		}, children)
 	end
-	return ui.el("div", {
-		key = "p-" .. provider.id,
-		class = "oup-prow",
-		attrs = {
-			["data-ou-pal"] = "p-" .. pal_key(color_key(provider.id, provider.label)),
-			["data-off"] = if settings.mode == "selected" and not on then true else nil,
-		},
-	}, {
+	-- each account's windows, in one pass over the provider's
+	local by: { [string]: { Window } } = {}
+	for _, window in provider.windows do
+		local owner, bare = account_of(window.label, provider.accounts)
+		if owner then
+			local copy = table.clone(window)
+			copy.account, copy.bare = owner, bare
+			by[owner] = by[owner] or {}
+			table.insert(by[owner], copy)
+		end
+	end
+	for _, name in names do
+		local windows = by[name] or {}
+		local off = account_off(settings, provider.id, name)
+		local value = provider.id .. "/" .. name
+		table.insert(
+			rows,
+			ui.el("div", {
+				key = "a-" .. name,
+				class = "oup-arow",
+				attrs = {
+					["data-hidden"] = if off then true else nil,
+					["data-off"] = if chosen and chosen ~= name then true else nil,
+					["data-picked"] = if chosen == name then true else nil,
+					["data-moving"] = if lifted == name then true else nil,
+				},
+			}, {
+				grip("account/" .. value, name, lifted == name),
+				account_name(name, off),
+				ui.el("span", { class = "oup-sum" }, (function(): { Node }
+					local nodes = left_now(settings, provider, windows)
+					if tags[name] and not off then
+						table.insert(nodes, ui.el("span", { class = "oup-group", text = tags[name] }))
+					end
+					return nodes
+				end)()),
+				ui.el("span", { class = "oup-ctl" }, {
+					ui.el("button", {
+						class = "oup-switch oup-aswitch",
+						actions = { click = "account-show=" .. value },
+						attrs = {
+							role = "switch",
+							["aria-checked"] = if off then "false" else "true",
+							["aria-label"] = provider.label .. " " .. name .. " on the line and in the card",
+							["data-on"] = if off then nil else true,
+						},
+					}, { ui.el("span", { class = "oup-knob" }) }),
+				}),
+			})
+		)
+	end
+	return ui.el("div", { class = "oup-accts" }, with_slots(names, rows, lifted, lifted or "", "account/" .. provider.id .. "/"))
+end
+
+local function provider_row(settings: Settings, provider: Provider, i: number): Node
+	local on = table.find(settings.selected, provider.id) ~= nil
+	local lifted = moving ~= nil and moving.kind == "provider" and moving.id == provider.id
+	local names = accounts_in_order(provider.accounts, settings.account_order[provider.id])
+	local several = #names > 1
+	local children: { Node } = {
 		ui.el("span", { class = "oup-who" }, {
+			grip("provider/" .. provider.id, provider.label, lifted),
 			ui.el("span", { class = "oup-idx", text = string.format("%02d", i) }),
 			ui.el("span", { class = "oup-swatch" }),
 			ui.el("span", { class = "oup-name", text = provider.label }),
 		}),
-		ui.el("span", { class = "oup-sum" }, left_now(settings, provider)),
+		ui.el(
+			"span",
+			{ class = if several then "oup-sum oup-sum-pick" else "oup-sum" },
+			if several then { build.account_chip(settings, provider, shown_accounts(settings, provider)) } else left_now(settings, provider, provider.windows)
+		),
 		ui.el("span", { class = "oup-ctl" }, {
 			ui.el("button", {
 				class = "oup-switch",
@@ -3114,20 +4487,44 @@ local function provider_row(settings: Settings, provider: Provider, i: number, n
 					["data-on"] = if on then true else nil,
 				},
 			}, { ui.el("span", { class = "oup-knob" }) }),
-			move("up", "Move " .. provider.label .. " up", i > 1, "chev-up", nil),
-			move("down", "Move " .. provider.label .. " down", i < n, "chev", nil),
-			move("top", "Move " .. provider.label .. " to the top", i > 1, nil, "top"),
 		}),
-	})
+	}
+	if several then
+		table.insert(children, account_rows(settings, provider, names))
+	end
+	return ui.el("div", {
+		key = "p-" .. provider.id,
+		class = "oup-prow",
+		attrs = {
+			["data-ou-pal"] = "p-" .. pal_key(color_key(provider.id, provider.label)),
+			["data-off"] = if settings.mode == "selected" and not on then true else nil,
+			["data-moving"] = if lifted then true else nil,
+		},
+	}, children)
 end
 
-local function providers_section(settings: Settings, providers: { Provider }): Node
+function build.providers(settings: Settings, providers: { Provider }): Node
 	local rows: { Node } = {}
+	local ids: { string } = {}
+	local accounts = false
 	for i, provider in providers do
-		table.insert(rows, provider_row(settings, provider, i, #providers))
+		table.insert(rows, provider_row(settings, provider, i))
+		table.insert(ids, provider.id)
+		accounts = accounts or #provider.accounts > 1
 	end
-	return section("providers", "Providers", "Top to bottom is the line's left to right. Click a window to hide or show it; the switches pick what Selected providers shows.", {
-		ui.el("div", { class = "oup-rows", attrs = { ["data-idle"] = if settings.mode ~= "selected" then true else nil } }, rows),
+	local note = "Top to bottom is the line's left to right: pick a row up by its grip, then click where it goes. "
+		.. "Click a window to hide or show it; the switches pick what Selected providers shows."
+	if accounts then
+		note ..= " With several accounts, click an account's name to show only it (again for all); its switch takes it off the line and card."
+	end
+	local lifted = if moving and moving.kind == "provider" then moving.id else nil
+	local label = if lifted then label_of(providers, lifted :: string) else ""
+	return section("providers", "Providers", note, {
+		ui.el(
+			"div",
+			{ class = "oup-rows", attrs = { ["data-idle"] = if settings.mode ~= "selected" then true else nil } },
+			with_slots(ids, rows, lifted, label, "provider/")
+		),
 	})
 end
 
@@ -3178,7 +4575,7 @@ local function color_row(settings: Settings, provider: Provider, rules: { string
 	})
 end
 
-local function colors_section(settings: Settings, providers: { Provider }, rules: { string }): Node
+function build.colors(settings: Settings, providers: { Provider }, rules: { string }): Node
 	local rows: { Node } = {}
 	for _, provider in providers do
 		table.insert(rows, color_row(settings, provider, rules))
@@ -3203,7 +4600,7 @@ local function update_status(): (string, string?)
 	return name .. " is up to date", "Checked " .. span(math.max(0, os.time() - last) * 1000) .. " ago"
 end
 
-local function updates_section(): Node
+function build.updates(): Node
 	local current = update.interval()
 	local pills: { Node } = {}
 	for _, interval in update.INTERVALS do
@@ -3261,8 +4658,8 @@ local function panel_dock(keys: string?): Node
 end
 
 -- What the panel shows now: the settings, the providers in order, the line it previews (the last pane's, drawn
--- with these settings) and the shortcut; `sig` changes whenever any of it does.
-type PanelState = { settings: Settings, providers: { Provider }, preview: Model, keys: string?, sig: string }
+-- with these settings), the cache it came from and the shortcut; `sig` changes whenever any of it does.
+type PanelState = { settings: Settings, providers: { Provider }, preview: Model, cache: Cache?, keys: string?, sig: string }
 
 local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): PanelState
 	local providers = ordered(offered_providers(cache), settings.order)
@@ -3275,6 +4672,7 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		colors_key(settings),
 		hidden_key(settings),
 		keys or "",
+		tostring(settings.card_rows),
 		update.interval().id,
 		(function(): string
 			local title, sub = update_status()
@@ -3286,10 +4684,16 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		for _, window in provider.windows do
 			table.insert(windows, window.label .. ":" .. tostring(window.pct))
 		end
-		table.insert(parts, provider.id .. "|" .. provider.label .. "|" .. provider.line .. "|" .. table.concat(windows, ","))
+		local accounts = table.concat(accounts_in_order(provider.accounts, settings.account_order[provider.id]), ",")
+		local off = table.concat(settings.account_hidden[provider.id] or {}, ",")
+		table.insert(
+			parts,
+			table.concat({ provider.id, provider.label, provider.line, table.concat(windows, ","), accounts, settings.account[provider.id] or "", off }, "|")
+		)
 	end
+	table.insert(parts, if moving then moving.kind .. ":" .. moving.id .. ":" .. (moving.name or "") else "")
 	table.insert(parts, preview.signature)
-	return { settings = settings, providers = providers, preview = preview, keys = keys, sig = table.concat(parts, "\n") }
+	return { settings = settings, providers = providers, preview = preview, cache = cache, keys = keys, sig = table.concat(parts, "\n") }
 end
 
 -- The panel's view, its bottom bar and its sheet.
@@ -3300,11 +4704,11 @@ local function panel_parts(state: PanelState): (Node, Node, string)
 		table.insert(rules, palette_rule(pal, palette_for(state.settings, provider.id, provider.label)))
 	end
 	local view = ui.el("div", { role = PANEL_ROLE }, {
-		preview_section(state.settings, state.preview, rules),
-		show_section(state.settings, state.providers),
-		providers_section(state.settings, state.providers),
-		colors_section(state.settings, state.providers, rules),
-		updates_section(),
+		build.preview(state.settings, state.preview, rules, settings_hint(state.keys), state.providers, state.cache),
+		build.show(state.settings, state.providers),
+		build.providers(state.settings, state.providers),
+		build.colors(state.settings, state.providers, rules),
+		build.updates(),
 	})
 	return view, panel_dock(state.keys), table.concat(rules, "\n")
 end
@@ -3321,6 +4725,9 @@ local function install_panel(css: string)
 	end
 end
 
+-- A drawing `sync_panel` scheduled and hasn't run yet; `flush_panel` runs it at once.
+local pending_draw: ((cx: WindowCx) -> ())? = nil
+
 -- Redraws the panel if what it shows changed (or `force`), from the poll's settings and cache when it has them.
 -- The drawing (the view, its sheet and the update, ~10 ms) runs in a call of its own, so a poll that also drew
 -- the line stays well inside its budget.
@@ -3334,20 +4741,39 @@ sync_panel = function(cx: WindowCx, force: boolean, settings: Settings?, cache: 
 		return
 	end
 	panel_sig = state.sig
-	tern.timer(0, function(later: WindowCx?)
-		if later == nil or panel_pane ~= pane or panel_sig ~= state.sig then
-			return -- closed, replaced, or a newer drawing is on its way
+	local function draw(later: WindowCx)
+		if pending_draw ~= draw then
+			return -- drawn already, or a newer drawing replaced this one
+		end
+		pending_draw = nil
+		if panel_pane ~= pane then
+			return -- closed or replaced
 		end
 		local view, dock, css = panel_parts(state)
 		install_panel(css)
 		local ok = pcall(function()
-			(later :: WindowCx).canvas:set(pane :: number, { view = view, dock = dock })
+			later.canvas:set(pane :: number, { view = view, dock = dock })
 		end)
 		if not ok then
 			panel_pane = nil -- closed meanwhile
 			panel_sig = nil
 		end
+	end
+	pending_draw = draw
+	tern.timer(0, function(later: WindowCx?)
+		if later then
+			draw(later)
+		end
 	end)
+end
+
+-- Draws a scheduled panel drawing now. Tern runs a timer set in an event handler (a click in the panel, a picker's
+-- answer) only at the plugin's next poll, up to a second later, so a choice made there draws at once instead.
+flush_panel = function(cx: WindowCx)
+	local draw = pending_draw
+	if draw then
+		draw(cx)
+	end
 end
 
 -- An update about to land, announced by any window: the plugin's sheets go away while Tern reloads it, so the
@@ -3421,7 +4847,34 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 	end
 	panel_pane = ev.pane
 	local act, value = ev.act, ev.value or ""
-	if act == "mode" then
+	-- What was picked up to move: a grab picks up (or puts back), a place puts it there, anything else puts it back.
+	local lifted = moving
+	moving = nil
+	if act == "grab" then
+		local id, name = string.match(value, "^account/([^/]+)/(.+)$")
+		local picked: Moving? = if id and name then { kind = "account", id = id, name = name } else nil
+		local provider = string.match(value, "^provider/(.+)$")
+		if picked == nil and provider then
+			picked = { kind = "provider", id = provider }
+		end
+		if picked == nil then
+			moving = lifted
+			return false
+		end
+		local again = lifted ~= nil and lifted.kind == picked.kind and lifted.id == picked.id and lifted.name == picked.name
+		moving = if again then nil else picked
+	elseif act == "place" then
+		local kind, at = string.match(value, "^(%a+)/.-(%d+)$")
+		local slot = tonumber(at)
+		if lifted == nil or kind ~= lifted.kind or slot == nil then
+			return false
+		end
+		if lifted.kind == "provider" then
+			move_provider(lifted.id, slot :: number)
+		elseif lifted.name then
+			move_account(lifted.id, lifted.name :: string, slot :: number)
+		end
+	elseif act == "mode" then
 		if value ~= "current" and value ~= "all" and value ~= "selected" then
 			return false
 		end
@@ -3429,14 +4882,34 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 	elseif act == "toggle" then
 		store.set(KV_SELECTED, toggled(load_settings().selected, value))
 		store.set(KV_MODE, "selected") -- switching a provider is choosing which to show
-	elseif act == "up" or act == "down" or act == "top" or act == "bottom" then
-		move_provider(value, act)
 	elseif act == "window" then
 		local id, label = string.match(value, "^([^/]+)/(.+)$")
 		if id == nil or label == nil then
 			return false
 		end
 		toggle_window(id, label)
+	elseif act == "account" then
+		local id, name = string.match(value, "^([^/]+)/(.*)$")
+		if id == nil or name == nil then
+			return false
+		end
+		choose_account(id, name)
+	elseif act == "combine" then
+		choose_account(value, COMBINED)
+	elseif act == "combine-plans" then
+		choose_account(value, COMBINED_PLANS)
+	elseif act == "card-rows" then
+		local rows = tonumber(value)
+		if rows == nil or not table.find(CARD_ROWS, rows) then
+			return false
+		end
+		store.set(KV_CARD_ROWS, rows)
+	elseif act == "account-show" then
+		local id, name = string.match(value, "^([^/]+)/(.+)$")
+		if id == nil or name == nil then
+			return false
+		end
+		toggle_account(id, name)
 	elseif act == "named" then
 		local key, name = string.match(value, "^(.*)/([^/]+)$")
 		if key == nil or name == nil or named_palette(name) == nil then
@@ -3457,6 +4930,7 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 		update.download(cx)
 		return true
 	else
+		moving = lifted
 		return false
 	end
 	after_change(cx)
@@ -3467,6 +4941,7 @@ tern.on("pane_closed", function(ev: { pane: number }, _cx: WindowCx)
 	if ev.pane == panel_pane then
 		panel_pane = nil
 		panel_sig = nil
+		moving = nil
 	end
 end)
 
@@ -3522,6 +4997,20 @@ local function open_menu(cx: WindowCx)
 				open_colors(cx2)
 			elseif choice.pick == "windows" then
 				open_windows(cx2)
+			elseif choice.pick == "accounts" then
+				open_accounts(cx2)
+			elseif choice.pick == "card-rows" then
+				local items: { PickItem } = {}
+				for _, rows in CARD_ROWS do
+					table.insert(items, { label = string.format("%d rows", rows), detail = string.format("about %dpx", rows * CARD_ROW + 14), current = rows == settings.card_rows, rows = rows })
+				end
+				cx2:pick({ items = items, placeholder = "How many rows may the card take? Past it, accounts sum up, then fold", icon = "gauge" })
+					:next(function(picked: PickItem?, _err2: string?, last_cx: WindowCx?)
+						if picked then
+							store.set(KV_CARD_ROWS, (picked :: any).rows)
+							after_change(last_cx or cx2)
+						end
+					end)
 			elseif choice.pick == "update" then
 				update.check(cx2, true)
 			elseif choice.pick == "update-every" then

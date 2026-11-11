@@ -361,22 +361,28 @@ function providerReports(reports, provider) {
 }
 
 // One word naming each report's account: its email's local part, else the
-// start of its account id, else its place in omp's order. Two accounts that
-// would share a name (alice@a.com, alice@b.com) get their place appended, so
-// every window label, and the plugin's per-window settings, stay distinct.
+// start of its account id, else its place in omp's order. Accounts that would
+// share a name (several team seats: claude-team@lumen.dev, claude-team@pinegg.gg)
+// tell themselves apart by their email's domain, as briefly as that does it:
+// its first label (`claude-team@lumen`, `claude-team@pinegg`), else all of it
+// (`claude-team@lumen.dev` beside `claude-team@lumen.ai`); two that still match
+// get their place appended. So every window label, and the plugin's settings
+// per window and per account, stay distinct.
 function accountLabels(reports) {
-  const names = reports.map((report, i) => {
+  const accounts = reports.map((report, i) => {
     const email = report?.metadata?.email;
     const id = report?.metadata?.accountId;
-    const name =
-      typeof email === "string" && email.includes("@")
-        ? email.split("@")[0]
-        : typeof id === "string" && id
-          ? id.slice(0, 8)
-          : `#${i + 1}`;
-    return name.replace(/\s+/g, "-");
+    if (typeof email === "string" && email.includes("@")) {
+      const at = email.lastIndexOf("@");
+      return { name: email.slice(0, at), domain: email.slice(at + 1).toLowerCase() };
+    }
+    return { name: typeof id === "string" && id ? id.slice(0, 8) : `#${i + 1}`, domain: "" };
   });
-  return names.map((name, i) => (names.indexOf(name) !== i || names.lastIndexOf(name) !== i ? `${name}#${i + 1}` : name));
+  const alone = (names, i) => names.indexOf(names[i]) === i && names.lastIndexOf(names[i]) === i;
+  const plain = accounts.map((a) => a.name);
+  const short = accounts.map((a, i) => (alone(plain, i) || !a.domain ? a.name : `${a.name}@${a.domain.split(".")[0]}`));
+  const long = accounts.map((a, i) => (alone(short, i) || !a.domain ? short[i] : `${a.name}@${a.domain}`));
+  return long.map((name, i) => (alone(long, i) ? name : `${name}#${i + 1}`).replace(/\s+/g, "-"));
 }
 
 // A report's windows for model `bare`: with no model, those that count toward
@@ -443,7 +449,10 @@ function render(state, ctx) {
 // - providers: every tracked provider with limits, keyed by provider id, in
 //   report order, as { label, line, resets } for the windows that count
 //   toward every model, tier meters included (see lineFor; no model is given,
-//   so model-scoped windows are left out).
+//   so model-scoped windows are left out). A provider with several accounts
+//   also lists them, as its line names them and in omp's order: `accounts`
+//   ["alice", "bob"], which the plugin needs to tell an account (`alice 7d`)
+//   from a tier (`Fable 7d`) and to let the user order and pick accounts.
 async function writeLines(state) {
   const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
   const models = state.models;
@@ -467,11 +476,14 @@ async function writeLines(state) {
     if (!isTrackedProvider(provider) || provider in providers) continue;
     const line = lineFor(reports, provider, "", index);
     if (!line) continue;
-    providers[provider] = {
+    const entry = {
       label: shortProvider(provider),
       line,
       resets: resetsFor(reports, provider, "", index),
     };
+    const accounts = accountsFor(reports, provider, "", index).map((a) => a.account);
+    if (accounts.length > 1) entry.accounts = accounts;
+    providers[provider] = entry;
   }
   const body = JSON.stringify({ entries, providers });
   // Unchanged data is still rewritten now and then, so generatedAt tells readers the file is live.

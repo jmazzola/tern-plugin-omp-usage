@@ -12,8 +12,13 @@ Hover it for each window's meter, reset time and saved resets:
   Gemini, Muse Code, …) and switches within ~2 s of Alt+P, or to a subagent's model while you view its transcript.
   New providers and windows show up without changes here.
 - **Or every provider**, or the ones you pick, in your order.
-- **Several accounts** for one provider each get their windows, labeled with the account's email name (`alice 7d`,
-  `bob 5h`). Hide any of them in the panel to fit the line.
+- **Several accounts** for one provider: all of them, each named once (`Claude dev.ops 5H … · a.k.chen 5H …`) in
+  your order, only the one you pick (the others summed up in the card), or **combined**: one set of windows, each
+  window's share their average and their saved resets added up, or **by plan**, the accounts with the same windows
+  together. Switch any account off to leave it out. Accounts go by the part of their email before the `@`; seats that share it add their domain
+  (`claude-team@lumen`, `claude-team@pinegg`).
+- **A card that fits.** You set how many rows it may take (26 by default); past that, accounts sum up to a row
+  each, then fold into one (`+4 more accounts · lowest 7D 5%`).
 - **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
   share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
@@ -73,13 +78,13 @@ Settings panel** in the palette. Changes apply at once, in every window.
 
 | Section | What it does |
 | --- | --- |
-| Line | Previews the line for the last omp pane you used |
+| Preview | The line and its card, drawn as the composer draws them for the last omp pane you used (the line ends where the panel does). Under it, **Card height**: 16 to 50 rows, 26 by default, a row being 18px; a warning says when a card can't fold down to it |
 | Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers** |
-| Providers | Click a window to hide or show it everywhere; the switch adds the provider to Selected; arrows and **top** reorder |
+| Providers | Pick a row up by its grip, then click where it goes; click a window to hide or show it everywhere; the switch adds the provider to Selected. With several accounts, each has its own row: grip, name (click it to show only that account, again for all), windows and a switch that takes it off the line and out of the card. A chip beside the provider says what shows, with a button for the next way: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 6 with 5H, 4 without ✕` with **all in one**, or `only dev.ops ✕`; by plan, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`) |
 | Updates | Status, **Check for Updates** or **Download Update**, and how often to check (see [Update](#update)) |
 
-![The settings panel: a line preview, the Show choices, providers with their window toggles (Claude's 5H hidden and struck through), switches and move buttons, and color swatches](docs/images/settings-panel.png)
+![The settings panel: a preview of the line with its card open, the Card height pills, the Show choices, providers with grips and their window toggles (Muse's 5H hidden and struck through), the Selected switches, and color swatches](docs/images/settings-panel.png)
 
 **omp Usage: Settings…** in the palette offers the same as keyboard menus.
 
@@ -95,13 +100,46 @@ Settings panel** in the palette. Changes apply at once, in every window.
 
 ![Custom colors: Claude in a red-orange gradient and Codex in cyan to violet, on the line and in the card](docs/images/card-colors.png)
 
-**Two Claude accounts**, alice and bob: the line fits alice's windows, the card has both, each with its own saved
-resets:
+**Ten Claude accounts**, two of them switched off: the line starts with the first account, and the card shows the
+first accounts' windows in full as long as it fits in your card height, then sums up each other account in a row;
+with still more, the last of those rows fold into one:
 
-![Two Claude accounts: the card lists alice's weekly and Fable weekly windows and bob's 5-hour, weekly and Fable weekly windows, each with its resets](docs/images/card-accounts.png)
+![Eight Claude accounts on: the card shows dev.ops and the next accounts with their windows and resets, then a row for each other account with its windows' shares and saved resets; the line shows Claude dev.ops 5H, 7D and Fable 7D](docs/images/card-accounts.png)
+
+In the panel, click an account's name to show only it (click it, or the chip beside the provider, again for all); the
+switches take accounts off the line and card:
+
+![The settings panel with ten Claude accounts: the chip only dev.ops beside Claude; a row per account with its grip, name, windows and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; the preview shows only dev.ops on the line and in its card](docs/images/settings-accounts.png)
+
+Then the line has room for all of that account's windows, and the card sums up the others in a row each:
+
+![Only dev.ops: the line shows its 5-hour, weekly and Fable weekly windows; the card lists them with their resets, then a row for each other account that is on](docs/images/card-account-one.png)
+
+**Combine** shows a provider's accounts as one: each window's share is the average of the accounts that have it,
+its reset the soonest, its saved resets all of theirs. A window only some accounts have says how many:
+
+![Ten Claude accounts combined: the line shows Claude 10 accounts 5H 64%, 7D 51% +6; the card has 10 accounts with a 5-hour window (6 of the 10 accounts), a weekly window with 6 saved resets and a Fable weekly window with 4 Fable resets](docs/images/card-combined.png)
+
+**By plan** keeps the accounts that have the same windows together instead. omp doesn't say which plan an account is
+on, so the windows tell them apart: here 6 accounts have a 5-hour window and 4 don't:
+
+![Ten Claude accounts combined by plan: the line shows Claude 6 accounts 5H 64%, 7D 49%; the card has 6 accounts with a 5-hour window, then 4 accounts without a 5-hour window, each with its windows and saved resets](docs/images/card-combined-plans.png)
+
+In the panel, the chip says how they split, and each account's row says which group it's in:
+
+![The settings panel with ten Claude accounts combined by plan: the chip by plan · 6 with 5H, 4 without beside an all in one button, and a tag at the end of each account's row, 5H or no 5H](docs/images/settings-combined.png)
+
+To reorder, pick an account (or a provider) up by its grip: it lifts, every place it can go opens, and a click puts it
+there. Its grip, now a cross, puts it back:
+
+![Moving a.k.chen: its row is ringed with a cross for a grip, and an a.k.chen here line sits in every gap between the other accounts, the one under the pointer lit](docs/images/settings-move.png)
+
+**omp Usage: Settings… › Provider accounts…** does the same from the palette, as keyboard menus:
+
+![The palette's Claude accounts menu: All accounts (8 accounts, one after another), Combined (one set of windows, shares averaged), Combined by plan (same windows together, shares averaged), then each account that is on with what it has left](docs/images/menu-accounts.png)
 
 The extension caches every line in `~/.omp/cache/usage-remaining.json`. All and Selected providers, subagent
-models and the card's reset dates read it; a cache older than 10 minutes is ignored.
+models, accounts and the card's reset dates read it; a cache older than 10 minutes is ignored.
 
 ## Update
 
