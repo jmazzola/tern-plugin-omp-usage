@@ -506,6 +506,13 @@ local function sort_providers(list: { Provider })
 	end)
 end
 
+-- Whether a window is Claude's Fable meter (`Fable 7d`, or `alice Fable 7d` with several accounts): its saved
+-- resets are Fable resets, marked `+NF` on the line.
+local function is_fable(provider: string?, label: string): boolean
+	local key = string.lower(label)
+	return provider == "anthropic" and (key == "fable 7d" or string.sub(key, -9) == " fable 7d")
+end
+
 -- Whether `windows` has one labeled `label` (without case: `fable 7d` is `Fable 7d`).
 local function has_window(windows: { Window }, label: string): boolean
 	local key = string.lower(label)
@@ -1077,7 +1084,7 @@ local function line_of(model: Model, compact: boolean?): Line
 				end
 			end
 			if window.saved then
-				local fable = group.id == "anthropic" and string.lower(window.label) == "fable 7d"
+				local fable = is_fable(group.id, window.label)
 				local saved = "+" .. tostring(window.saved) .. (if fable then "F" else "")
 				if window.expires then
 					saved ..= if several then "!" else NBSP .. "exp" .. NBSP .. unbroken(window.expires :: string)
@@ -1402,7 +1409,7 @@ local function card(model: Model, hint: string): { Row }
 		end
 		local resets = group.resets or {}
 		local function add_resets(label: string): boolean
-			local fable = group.id == "anthropic" and label == "fable 7d"
+			local fable = is_fable(group.id, label)
 			local added = false
 			for _, reset in resets do
 				if reset.window == label or (reset.window == nil and label == "7d") then
@@ -1432,7 +1439,7 @@ local function card(model: Model, hint: string): { Row }
 			local has_dates = add_resets(string.lower(window.label))
 			if not has_dates and window.saved then
 				local saved = window.saved :: number
-				local kind = if group.id == "anthropic" and string.lower(window.label) == "fable 7d" then "Fable reset" else "saved reset"
+				local kind = if is_fable(group.id, window.label) then "Fable reset" else "saved reset"
 				local row = string.format("%d %s%s", saved, kind, if saved == 1 then "" else "s")
 				if window.expires then
 					row ..= " · expires in " .. (window.expires :: string)

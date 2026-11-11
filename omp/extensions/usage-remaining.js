@@ -89,7 +89,7 @@ function chipName(m) {
   return name.startsWith("Claude ") ? name.slice(7) : name;
 }
 
-// Any provider can have a usage report; pickReport decides whether one exists.
+// Any provider can have a usage report; providerReports decides whether one exists.
 function isTrackedProvider(provider) {
   return provider !== "";
 }
@@ -174,13 +174,6 @@ function shortProvider(provider) {
   if (known) return known;
   const word = provider.split(/[^a-z0-9]+/i).find((w) => w && !GENERIC_ID_WORDS.has(w.toLowerCase()));
   return word ? word[0].toUpperCase() + word.slice(1) : provider.replace(/\s+/g, "-");
-}
-
-function pickReport(reports, activeProvider) {
-  const withLimits = reports.filter((r) => r && Array.isArray(r.limits) && r.limits.length > 0);
-  if (!withLimits.length) return null;
-  // Exact provider match only: never backfill from another provider's report.
-  return withLimits.find((r) => String(r.provider).toLowerCase() === activeProvider) ?? null;
 }
 
 // The bare ids of each provider's available models (ctx.models.list()), by
@@ -292,8 +285,9 @@ function expiringResetLeft(report, limit, wc, now, general) {
   return soonest === Infinity ? undefined : soonest;
 }
 
-// Expiries are associated with the same weekly window that displays the count.
-function savedResets(report, applies, bares) {
+// Expiries are associated with the same weekly window that displays the count,
+// labeled as renderRemaining labels it (`account` included).
+function savedResets(report, applies, bares, account) {
   const credits = Array.isArray(report.resetCredits?.credits) ? report.resetCredits.credits : [];
   const now = Date.now();
   const out = [];
@@ -301,7 +295,8 @@ function savedResets(report, applies, bares) {
     const w = windowOf(limit);
     if (!applies(limit) || w?.key !== "7d") continue;
     const scope = scopeOf(limit, bares).name.replace(/\s+/g, "-");
-    const label = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
+    const scoped = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
+    const label = account ? `${account} ${scoped}` : scoped;
     for (const c of credits) {
       if (!creditApplies(c, report, limit, !scope)) continue;
       const expiresAt = Date.parse(c.expiresAt);
@@ -365,20 +360,42 @@ function providerReports(reports, provider) {
   );
 }
 
-// One word naming a report's account: its email's local part, else the start
-// of its account id, else its place in omp's order.
-function accountLabel(report, i) {
-  const email = report?.metadata?.email;
-  if (typeof email === "string" && email.includes("@")) return email.split("@")[0];
-  const id = report?.metadata?.accountId;
-  return typeof id === "string" && id ? id.slice(0, 8) : `#${i + 1}`;
+// One word naming each report's account: its email's local part, else the
+// start of its account id, else its place in omp's order. Two accounts that
+// would share a name (alice@a.com, alice@b.com) get their place appended, so
+// every window label, and the plugin's per-window settings, stay distinct.
+function accountLabels(reports) {
+  const names = reports.map((report, i) => {
+    const email = report?.metadata?.email;
+    const id = report?.metadata?.accountId;
+    const name =
+      typeof email === "string" && email.includes("@")
+        ? email.split("@")[0]
+        : typeof id === "string" && id
+          ? id.slice(0, 8)
+          : `#${i + 1}`;
+    return name.replace(/\s+/g, "-");
+  });
+  return names.map((name, i) => (names.indexOf(name) !== i || names.lastIndexOf(name) !== i ? `${name}#${i + 1}` : name));
 }
 
-function windowsFor(report, bare, index, account) {
-  const bares = providerBares(report, index);
-  const line = renderRemaining(report, appliesTo(bare, bares), bares, account);
-  if (line || bare) return line;
-  return renderRemaining(report, () => true, bares, account);
+// A report's windows for model `bare`: with no model, those that count toward
+// every model, else (a provider whose limits are all model-scoped) all of them.
+function appliesFor(report, bare, bares) {
+  const applies = appliesTo(bare, bares);
+  if (bare || (report.limits ?? []).some((l) => applies(l) && windowOf(l))) return applies;
+  return () => true;
+}
+
+// Every account of `provider` with its label ("" with one account) and the
+// filter for model `bare`.
+function accountsFor(reports, provider, bare, index) {
+  const matches = providerReports(reports, provider);
+  const labels = matches.length > 1 ? accountLabels(matches) : matches.map(() => "");
+  return matches.map((report, i) => {
+    const bares = providerBares(report, index);
+    return { report, bares, account: labels[i], applies: appliesFor(report, bare, bares) };
+  });
 }
 
 // The status for a model from fetched reports; "" when its provider isn't
@@ -386,13 +403,22 @@ function windowsFor(report, bare, index, account) {
 // that count toward every model; a provider whose limits are all scoped to
 // some of its models shows those instead, so a provider with limits is never
 // left out. With several accounts, each account's windows follow in omp's
-// order, labeled with the account.
+// order, labeled with the account (`Claude alice 7d … · bob 5h …`).
 function lineFor(reports, provider, bare, index) {
   if (!isTrackedProvider(provider)) return "";
-  const matches = providerReports(reports, provider);
-  const many = matches.length > 1;
-  const parts = matches.map((r, i) => windowsFor(r, bare, index, many ? accountLabel(r, i) : "")).filter(Boolean);
-  return parts.length ? `${shortProvider(matches[0].provider)} ${parts.join(" · ")}` : "";
+  const accounts = accountsFor(reports, provider, bare, index);
+  const parts = accounts
+    .map((a) => renderRemaining(a.report, a.applies, a.bares, a.account))
+    .filter(Boolean);
+  return parts.length ? `${shortProvider(accounts[0].report.provider)} ${parts.join(" · ")}` : "";
+}
+
+// The saved resets of every account of `provider`, soonest expiry first.
+function resetsFor(reports, provider, bare, index) {
+  if (!isTrackedProvider(provider)) return [];
+  return accountsFor(reports, provider, bare, index)
+    .flatMap((a) => savedResets(a.report, a.applies, a.bares, a.account))
+    .sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
 // Draws the status for the active model from the last fetched reports. With
@@ -428,11 +454,9 @@ async function writeLines(state) {
     const name = chipName(m);
     if (!name) continue;
     const { provider, bare } = identity(m);
-    const report = isTrackedProvider(provider) ? pickReport(reports, provider) : null;
-    const bares = report ? providerBares(report, index) : undefined;
     const entry = {
       line: lineFor(reports, provider, bare, index),
-      resets: report ? savedResets(report, appliesTo(bare, bares), bares) : [],
+      resets: resetsFor(reports, provider, bare, index),
     };
     const same = name in entries && JSON.stringify(entries[name]) === JSON.stringify(entry);
     entries[name] = !(name in entries) || same ? entry : null;
@@ -441,14 +465,12 @@ async function writeLines(state) {
   for (const r of reports) {
     const provider = String(r?.provider ?? "").toLowerCase();
     if (!isTrackedProvider(provider) || provider in providers) continue;
-    const report = pickReport(reports, provider);
     const line = lineFor(reports, provider, "", index);
-    if (!report || !line) continue;
-    const bares = providerBares(report, index);
+    if (!line) continue;
     providers[provider] = {
       label: shortProvider(provider),
       line,
-      resets: savedResets(report, appliesTo("", bares), bares),
+      resets: resetsFor(reports, provider, "", index),
     };
   }
   const body = JSON.stringify({ entries, providers });

@@ -12,6 +12,8 @@ Hover it for each window's meter, reset time and saved resets:
   Gemini, Muse Code, …) and switches within ~2 s of Alt+P, or to a subagent's model while you view its transcript.
   New providers and windows show up without changes here.
 - **Or every provider**, or the ones you pick, in your order.
+- **Several accounts** for one provider each get their windows, labeled with the account's email name (`alice 7d`,
+  `bob 5h`). Hide any of them in the panel to fit the line.
 - **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
   share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
@@ -92,6 +94,11 @@ Settings panel** in the palette. Changes apply at once, in every window.
 **Colors**: Claude on Sunset, Codex on a custom `#22d3ee, #a78bfa`:
 
 ![Custom colors: Claude in a red-orange gradient and Codex in cyan to violet, on the line and in the card](docs/images/card-colors.png)
+
+**Two Claude accounts**, alice and bob: the line fits alice's windows, the card has both, each with its own saved
+resets:
+
+![Two Claude accounts: the card lists alice's weekly and Fable weekly windows and bob's 5-hour, weekly and Fable weekly windows, each with its resets](docs/images/card-accounts.png)
 
 The extension caches every line in `~/.omp/cache/usage-remaining.json`. All and Selected providers, subagent
 models and the card's reset dates read it; a cache older than 10 minutes is ignored.
