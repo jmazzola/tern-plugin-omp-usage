@@ -9,7 +9,8 @@
   their README references and alt text. Delete pictures nothing references any more.
 - **Take pictures like the existing ones:** Tern's dark Titanium theme; a headless `tern serve` session at 2× where
   it can show the surface (a real window, enlarged 2×, only where headless can't, e.g. the status line); real data,
-  not placeholders; cropped to the surface with a little margin.
+  not placeholders; cropped to the surface with a little margin. In the README, show each at half its pixel width
+  (`<img src="…" alt="…" width="…">`), so a 2× picture reads at its real size.
 - **History:** squash a feature's local commits into one before pushing. Never rewrite commits already on GitHub:
   the plugin's updater only fast-forwards, so a rewrite strands everyone who already pulled.
 - **Commit messages are release notes.** The update card shows users every commit that changes the plugin's folder

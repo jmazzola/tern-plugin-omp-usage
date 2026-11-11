@@ -2,11 +2,11 @@
 
 Your omp usage limits, just above the omp composer's context bar in [Tern](https://stencil.so/tern):
 
-![The usage line above the omp composer: Claude's 5-hour, 7-day and Fable 7-day windows with bars, share left, reset countdowns, a saved reset (+1) and two Fable resets (+2F)](docs/images/line-current.png)
+<img src="docs/images/line-current.png" alt="The usage line above the omp composer: Claude's 5-hour, 7-day and Fable 7-day windows with bars, share left, reset countdowns, a saved reset (+1) and two Fable resets (+2F)" width="756">
 
 Hover it for each window's meter, reset time and saved resets:
 
-![The hover card: Claude's 5-hour, weekly and Fable weekly windows with meters and reset times, a saved reset under the weekly window and two Fable resets under the Fable window](docs/images/card-current.png)
+<img src="docs/images/card-current.png" alt="The hover card: Claude's 5-hour, weekly and Fable weekly windows with meters and reset times, a saved reset under the weekly window and two Fable resets under the Fable window" width="756">
 
 - **Follows your model.** Shows the active model's provider (anything `omp usage` reports: Claude, Codex, Kimi,
   Gemini, Muse Code, …) and switches within ~2 s of Alt+P, or to a subagent's model while you view its transcript.
@@ -25,7 +25,7 @@ Hover it for each window's meter, reset time and saved resets:
 - **Updates itself** like Tern does: an **Update omp Usage** pill in the status line, one click to see what's new
   and install it. Nothing pops up over your work.
 
-![The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now](docs/images/update-card.png)
+<img src="docs/images/update-card.png" alt="The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now" width="991">
 
 | Part | What it does |
 | --- | --- |
@@ -84,59 +84,59 @@ Settings panel** in the palette. Changes apply at once, in every window.
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`) |
 | Updates | Status, **Check for Updates** or **Download Update**, and how often to check (see [Update](#update)) |
 
-![The settings panel: a preview of the line with its card open, the Card height pills, the Show choices, providers with grips and their window toggles (Muse's 5H hidden and struck through), the Selected switches, and color swatches](docs/images/settings-panel.png)
+<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line with its card open, the Card height pills, the Show choices, providers with grips and their window toggles (Muse's 5H hidden and struck through), the Selected switches, and color swatches" width="610">
 
 **omp Usage: Settings…** in the palette offers the same as keyboard menus.
 
 **All providers**, one after another; Muse Code's 5-hour window has turned amber:
 
-![All providers: Claude, Codex and Muse on one line, with a card listing each provider's windows and saved resets](docs/images/card-all.png)
+<img src="docs/images/card-all.png" alt="All providers: Claude, Codex and Muse on one line, with a card listing each provider's windows and saved resets" width="756">
 
 **Selected providers**, here Codex and Muse while an Opus model is in use:
 
-![Selected providers: Codex's weekly window and Muse's 5-hour window on the line](docs/images/line-selected.png)
+<img src="docs/images/line-selected.png" alt="Selected providers: Codex's weekly window and Muse's 5-hour window on the line" width="756">
 
 **Colors**: Claude on Sunset, Codex on a custom `#22d3ee, #a78bfa`:
 
-![Custom colors: Claude in a red-orange gradient and Codex in cyan to violet, on the line and in the card](docs/images/card-colors.png)
+<img src="docs/images/card-colors.png" alt="Custom colors: Claude in a red-orange gradient and Codex in cyan to violet, on the line and in the card" width="756">
 
 **Ten Claude accounts**, two of them switched off: the line starts with the first account, and the card shows the
 first accounts' windows in full as long as it fits in your card height, then sums up each other account in a row;
 with still more, the last of those rows fold into one:
 
-![Eight Claude accounts on: the card shows dev.ops and the next accounts with their windows and resets, then a row for each other account with its windows' shares and saved resets; the line shows Claude dev.ops 5H, 7D and Fable 7D](docs/images/card-accounts.png)
+<img src="docs/images/card-accounts.png" alt="Eight Claude accounts on: the card shows dev.ops and the next accounts with their windows and resets, then a row for each other account with its windows' shares and saved resets; the line shows Claude dev.ops 5H, 7D and Fable 7D" width="730">
 
 In the panel, click an account's name to show only it (click it, or the chip beside the provider, again for all); the
 switches take accounts off the line and card:
 
-![The settings panel with ten Claude accounts: the chip only dev.ops beside Claude; a row per account with its grip, name, windows and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; the preview shows only dev.ops on the line and in its card](docs/images/settings-accounts.png)
+<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the chip only dev.ops beside Claude; a row per account with its grip, name, windows and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; the preview shows only dev.ops on the line and in its card" width="610">
 
 Then the line has room for all of that account's windows, and the card sums up the others in a row each:
 
-![Only dev.ops: the line shows its 5-hour, weekly and Fable weekly windows; the card lists them with their resets, then a row for each other account that is on](docs/images/card-account-one.png)
+<img src="docs/images/card-account-one.png" alt="Only dev.ops: the line shows its 5-hour, weekly and Fable weekly windows; the card lists them with their resets, then a row for each other account that is on" width="730">
 
 **Combine** shows a provider's accounts as one: each window's share is the average of the accounts that have it,
 its reset the soonest, its saved resets all of theirs. A window only some accounts have says how many:
 
-![Ten Claude accounts combined: the line shows Claude 10 accounts 5H 64%, 7D 51% +6; the card has 10 accounts with a 5-hour window (6 of the 10 accounts), a weekly window with 6 saved resets and a Fable weekly window with 4 Fable resets](docs/images/card-combined.png)
+<img src="docs/images/card-combined.png" alt="Ten Claude accounts combined: the line shows Claude 10 accounts 5H 64%, 7D 51% +6; the card has 10 accounts with a 5-hour window (6 of the 10 accounts), a weekly window with 6 saved resets and a Fable weekly window with 4 Fable resets" width="730">
 
 **By plan** keeps the accounts that have the same windows together instead. omp doesn't say which plan an account is
 on, so the windows tell them apart: here 6 accounts have a 5-hour window and 4 don't:
 
-![Ten Claude accounts combined by plan: the line shows Claude 6 accounts 5H 64%, 7D 49%; the card has 6 accounts with a 5-hour window, then 4 accounts without a 5-hour window, each with its windows and saved resets](docs/images/card-combined-plans.png)
+<img src="docs/images/card-combined-plans.png" alt="Ten Claude accounts combined by plan: the line shows Claude 6 accounts 5H 64%, 7D 49%; the card has 6 accounts with a 5-hour window, then 4 accounts without a 5-hour window, each with its windows and saved resets" width="730">
 
 In the panel, the chip says how they split, and each account's row says which group it's in:
 
-![The settings panel with ten Claude accounts combined by plan: the chip by plan · 6 with 5H, 4 without beside an all in one button, and a tag at the end of each account's row, 5H or no 5H](docs/images/settings-combined.png)
+<img src="docs/images/settings-combined.png" alt="The settings panel with ten Claude accounts combined by plan: the chip by plan · 6 with 5H, 4 without beside an all in one button, and a tag at the end of each account's row, 5H or no 5H" width="610">
 
 To reorder, pick an account (or a provider) up by its grip: it lifts, every place it can go opens, and a click puts it
 there. Its grip, now a cross, puts it back:
 
-![Moving a.k.chen: its row is ringed with a cross for a grip, and an a.k.chen here line sits in every gap between the other accounts, the one under the pointer lit](docs/images/settings-move.png)
+<img src="docs/images/settings-move.png" alt="Moving a.k.chen: its row is ringed with a cross for a grip, and an a.k.chen here line sits in every gap between the other accounts, the one under the pointer lit" width="610">
 
 **omp Usage: Settings… › Provider accounts…** does the same from the palette, as keyboard menus:
 
-![The palette's Claude accounts menu: All accounts (8 accounts, one after another), Combined (one set of windows, shares averaged), Combined by plan (same windows together, shares averaged), then each account that is on with what it has left](docs/images/menu-accounts.png)
+<img src="docs/images/menu-accounts.png" alt="The palette's Claude accounts menu: All accounts (8 accounts, one after another), Combined (one set of windows, shares averaged), Combined by plan (same windows together, shares averaged), then each account that is on with what it has left" width="566">
 
 The extension caches every line in `~/.omp/cache/usage-remaining.json`. All and Selected providers, subagent
 models, accounts and the card's reset dates read it; a cache older than 10 minutes is ignored.
@@ -146,7 +146,7 @@ models, accounts and the card's reset dates read it; a cache older than 10 minut
 The plugin checks your clone's remote every 6 hours (Hourly, Daily, Weekly or Off in the panel). When there's a new
 version, a toast says so once and an **Update omp Usage** pill sits in the status line until you deal with it:
 
-![The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line](docs/images/update-status.png)
+<img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line" width="638">
 
 Click it (or **Check for Updates**) for the update card shown at the top: the version available, the one you have,
 and every new commit in full.
@@ -159,7 +159,7 @@ and every new commit in full.
 
 Open settings panels step aside while the update lands, so nothing flashes half-drawn:
 
-![Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0](docs/images/update-landing.png)
+<img src="docs/images/update-landing.png" alt="Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0" width="778">
 
 - Only commits that change `omp-usage/` or `omp/` count; README-only pushes don't light the pill and come along with
   the next real update.
