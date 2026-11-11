@@ -1180,6 +1180,10 @@ end
 -- The hover target: the composer's empty chips row (see the header), laid over the usage line.
 local HOST = "%s.sf-col[data-role^='omp.editor'] > .sf-row[data-role='omp.composer.chips']:is(.sf-hidden, .sf-void)"
 local METER = ".tn-pane.on .sf-meter[data-role='omp.composer.context']"
+local METER_SPINE = ".tn-pane.on .sf-chat-spine .sf-meter[data-role='omp.composer.context']"
+-- Spine's `--sp-side` (Tern's `max(calc(var(--sp-pad) + var(--tv-px, 0px)), calc(50% - 420px))` on the dock) for
+-- the column's box, used from the meter, which is that box less its 16px right inset.
+local SPINE_SIDE = "max(calc(var(--sp-pad) + var(--tv-px, 0px)), calc((100% + 16px) / 2 - 420px))"
 
 -- The target in the focused pane; `region` narrows it by a class of the surface region (`.sf-chat-reader`,
 -- `.sf-still`), which sits between the pane and the composer.
@@ -1222,7 +1226,8 @@ end
 -- the target's box is the capsule, its `::before` the bright copy, glyph for glyph over the line, and its
 -- `::after` the card.
 local LINE_CSS = [==[
-/* room above the hairline for the usage line, clear of the working row; every agent pane, so focus never shifts it */
+/* room above the hairline for the usage line, clear of the working row (in spine, under it: see below); every agent
+   pane, so focus never shifts it */
 .sf-dock .sf-col[data-role^='omp.editor'] {
 	margin-top: 15px;
 }
@@ -1262,6 +1267,19 @@ $METER::before {
 	margin-bottom: 2px;
 }
 $TIPS_CSS
+/* Spine lays the meter across the whole dock, from its left edge, with the working row right above it, and insets
+   the composer's column by its `--sp-side`: there the line goes under the hairline instead, on the column, in the
+   room the margin above leaves between the hairline and the input. Its tips and comets (`::after`) go with it.
+   `--sp-side` takes half the width of the box it's used in, and the meter is 16px narrower than the column's box
+   (`right: 16px`), so here it is Tern's formula over that box's width. */
+$METER_SPINE::before,
+$METER_SPINE::after {
+	left: $SPINE_SIDE;
+	right: calc($SPINE_SIDE - 16px);
+	top: calc(100% + 4px);
+	bottom: auto;
+	margin-bottom: 0;
+}
 /* the hover target over the line: the meter's place in each chat style, widened by the capsule's 6px pad, as
    long as the line (or the meter, if that's shorter) */
 $HOST {
@@ -1290,8 +1308,9 @@ $HOST_READER {
 	width: min($WIDTH, calc(100% - 32px));
 }
 $HOST_SPINE {
-	left: -6px;
-	width: min($WIDTH, calc(100% - 4px));
+	left: calc(var(--sp-side) - 6px);
+	top: 5px;
+	width: min($WIDTH, calc(100% - 2 * var(--sp-side) + 12px));
 }
 $HOST_CONSOLE {
 	left: calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px);
@@ -1360,6 +1379,8 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 	end
 	return fill(LINE_CSS, {
 		METER = METER,
+		METER_SPINE = METER_SPINE,
+		SPINE_SIDE = SPINE_SIDE,
 		HOST = host(nil),
 		HOST_READER = host(".sf-chat-reader"),
 		HOST_SPINE = host(".sf-chat-spine"),

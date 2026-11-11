@@ -1,6 +1,7 @@
 # tern-plugin-omp-usage
 
-Your omp usage limits, just above the omp composer's context bar in [Tern](https://stencil.so/tern):
+Your omp usage limits, just above the omp composer's context bar in [Tern](https://stencil.so/tern) (in the Spine
+chat style, just below it, on the composer's column):
 
 ![The usage line above the omp composer: Claude's 5-hour, 7-day and Fable 7-day windows with bars, share left, reset countdowns, a saved reset (+1) and two Fable resets (+2F)](docs/images/line-current.png)
 
@@ -64,7 +65,8 @@ should list them). Use forward slashes in paths, even on Windows.
 
    or, with `preset: custom`, add `status` to `leftSegments`.
 
-5. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` within seconds.
+5. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` (below it in Spine)
+   within seconds.
 
 ## Settings
 
