@@ -312,10 +312,11 @@ function savedResets(report, applies, bares) {
   return out.sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
-// The line for the windows `applies` passes: one per window, a limit with a
+// The windows `applies` passes, joined: one per window, a limit with a
 // tier/model scope (see scopeOf) on its own, labeled with it (`Fable 7d`) and
-// keyed apart from the general window of the same length.
-function renderRemaining(report, applies, bares) {
+// keyed apart from the general window of the same length. `account` (set when
+// the provider has several accounts) leads every label: `alice 5h`.
+function renderRemaining(report, applies, bares, account) {
   const now = Date.now();
   const seen = new Map();
   for (const limit of report.limits) {
@@ -325,7 +326,8 @@ function renderRemaining(report, applies, bares) {
     const scope = scopeOf(limit, bares).name.replace(/\s+/g, "-");
     const key = scope ? `${scope}:${w.key}` : w.key;
     if (seen.has(key)) continue;
-    const label = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
+    const scoped = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
+    const label = account ? `${account} ${scoped}` : scoped;
     const amount = limit.amount ?? {};
     const remainingFrac =
       typeof amount.remainingFraction === "number"
@@ -348,27 +350,49 @@ function renderRemaining(report, applies, bares) {
     const reset = typeof resetsAt === "number" ? ` (${fmtResetShort(resetsAt - now)})` : "";
     seen.set(key, { ms: w.ms, scoped: !!scope, text: `${label} ${meter} ${pct}% left${reset}${extra}` });
   }
-  if (!seen.size) return undefined;
   // Shortest window first; at the same length the general one before scoped ones.
-  const parts = [...seen.values()]
+  return [...seen.values()]
     .sort((a, b) => (a.ms !== b.ms ? (a.ms < b.ms ? -1 : 1) : Number(a.scoped) - Number(b.scoped)))
-    .map((p) => p.text);
-  return `${shortProvider(report.provider)} ${parts.join(" · ")}`;
+    .map((p) => p.text)
+    .join(" · ");
+}
+
+// Every report with limits for `provider`, in omp's order: one per signed-in
+// account, so a provider with several accounts has several.
+function providerReports(reports, provider) {
+  return reports.filter(
+    (r) => r && Array.isArray(r.limits) && r.limits.length > 0 && String(r.provider).toLowerCase() === provider,
+  );
+}
+
+// One word naming a report's account: its email's local part, else the start
+// of its account id, else its place in omp's order.
+function accountLabel(report, i) {
+  const email = report?.metadata?.email;
+  if (typeof email === "string" && email.includes("@")) return email.split("@")[0];
+  const id = report?.metadata?.accountId;
+  return typeof id === "string" && id ? id.slice(0, 8) : `#${i + 1}`;
+}
+
+function windowsFor(report, bare, index, account) {
+  const bares = providerBares(report, index);
+  const line = renderRemaining(report, appliesTo(bare, bares), bares, account);
+  if (line || bare) return line;
+  return renderRemaining(report, () => true, bares, account);
 }
 
 // The status for a model from fetched reports; "" when its provider isn't
 // tracked or has no report. With no model (`bare` ""), the provider's windows
 // that count toward every model; a provider whose limits are all scoped to
 // some of its models shows those instead, so a provider with limits is never
-// left out.
+// left out. With several accounts, each account's windows follow in omp's
+// order, labeled with the account.
 function lineFor(reports, provider, bare, index) {
   if (!isTrackedProvider(provider)) return "";
-  const report = pickReport(reports, provider);
-  if (!report) return "";
-  const bares = providerBares(report, index);
-  const line = renderRemaining(report, appliesTo(bare, bares), bares);
-  if (line || bare) return line || "";
-  return renderRemaining(report, () => true, bares) || "";
+  const matches = providerReports(reports, provider);
+  const many = matches.length > 1;
+  const parts = matches.map((r, i) => windowsFor(r, bare, index, many ? accountLabel(r, i) : "")).filter(Boolean);
+  return parts.length ? `${shortProvider(matches[0].provider)} ${parts.join(" · ")}` : "";
 }
 
 // Draws the status for the active model from the last fetched reports. With
