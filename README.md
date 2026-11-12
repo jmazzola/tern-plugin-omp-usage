@@ -4,6 +4,10 @@ Your omp usage limits, just above the omp composer's context bar in [Tern](https
 
 <img src="docs/images/line-current.png" alt="The usage line above the omp composer: Claude's 5-hour, 7-day and Fable 7-day windows with bars, share left, reset countdowns, a saved reset (+1) and two Fable resets (+2F)" width="756">
 
+In the Spine chat style it sits just below the bar instead, on the composer's column, clear of omp's working status:
+
+<img src="docs/images/line-spine.png" alt="Spine chat style: omp's working status above the context bar, and the usage line under the bar, lined up with the composer's input: Claude's 7-day and Fable 7-day windows with a saved reset (+1) and a Fable reset (+1F)" width="532">
+
 Hover it for each window's meter, reset time and saved resets:
 
 <img src="docs/images/card-current.png" alt="The hover card: Claude's 5-hour, weekly and Fable weekly windows with meters and reset times, a saved reset under the weekly window and two Fable resets under the Fable window" width="756">
@@ -69,7 +73,8 @@ should list them). Use forward slashes in paths, even on Windows.
 
    or, with `preset: custom`, add `status` to `leftSegments`.
 
-5. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` within seconds.
+5. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` (below it in Spine)
+   within seconds.
 
 ## Settings
 
