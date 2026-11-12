@@ -1579,7 +1579,6 @@ end
 
 -- The hover target: the composer's empty chips row (see the header), laid over the usage line.
 local HOST = "%s.sf-col[data-role^='omp.editor'] > .sf-row[data-role='omp.composer.chips']:is(.sf-hidden, .sf-void)"
-local METER = ".tn-pane.on .sf-meter[data-role='omp.composer.context']"
 -- Spine's `--sp-side` (Tern's `max(calc(var(--sp-pad) + var(--tv-px, 0px)), calc(50% - 420px))` on the dock, with
 -- `--sp-pad` its `max(16px, min(40px, 4%))`) for the column's box, used from the meter, which is that box less its
 -- 16px right inset: both percentages are taken of `100% + 16px`.
@@ -2239,8 +2238,8 @@ local function card_css(rows: { Row }, target: string?): string
 	})
 end
 
-local STILL_CSS = fill(
-	[==[
+-- Filled per sheet (sheet), so it follows the line's pane as the rest of the line does.
+local STILL_CSS = [==[
 /* Reduce Motion, either way: no fades, no rise, no fill, no change sweep; the card still waits its beat, then
    shows at once */
 $HOST_STILL,
@@ -2250,8 +2249,8 @@ $HOST_STILL::before {
 $HOST_STILL:hover::after {
 	animation: omp-usage-card-still 0s 0.35s both !important;
 }
-.tn-pane.on .sf-still .sf-meter[data-role='omp.composer.context']::before,
-.tn-pane.on .sf-still .sf-meter[data-role='omp.composer.context']::after {
+$METER_STILL::before,
+$METER_STILL::after {
 	animation: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2271,9 +2270,7 @@ $HOST_STILL:hover::after {
 	from { opacity: 0; }
 	to { opacity: 1; }
 }
-]==],
-	{ HOST = host(nil), HOST_STILL = host(".sf-still"), METER = METER }
-)
+]==]
 
 local PULSE_CSS = [==[
 /* the change: the line prints again, left to right, while a comet runs each changed bar to its new level,
@@ -2369,7 +2366,8 @@ local function sheet(model: Model, settings: Settings, p: Pulse?, hint: string):
 		return ""
 	end
 	local line = line_of(model)
-	local css = line_css(line, model, settings) .. card_css(card(model, hint, settings.card_rows)) .. STILL_CSS
+	local still = fill(STILL_CSS, { HOST = host(nil), HOST_STILL = host(".sf-still"), METER = meter(), METER_STILL = meter(".sf-still") })
+	local css = line_css(line, model, settings) .. card_css(card(model, hint, settings.card_rows)) .. still
 	-- Only while it runs: a sheet rewritten later (a countdown tick) must not replay it.
 	if p and #line.bars > 0 and tern.now() < p.until_ms then
 		css ..= pulse_css(line, p)
