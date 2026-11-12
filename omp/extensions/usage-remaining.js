@@ -30,9 +30,10 @@
 // a subagent's transcript is viewed (omp's chip then shows the subagent's
 // model, but the status stays the main session's) for that model's line.
 import { execFile } from "node:child_process";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const STATUS_KEY = "usage-remaining";
 const INTERVAL_MS = 60_000;
@@ -41,6 +42,29 @@ const RESET_EXPIRY_WARN_MS = 5 * 86_400_000;
 const TIMEOUT_MS = 15_000;
 const LINES_FILE = join(homedir(), ".omp", "cache", "usage-remaining.json");
 const LINES_REFRESH_MS = 120_000;
+
+// This file's text as the session loaded it. Every omp session writes
+// LINES_FILE, and a session started before an update keeps running the old
+// code, so it would overwrite the updated sessions' lines with its own (a
+// Fable reset's date flipping between two values). A session whose file on
+// disk no longer matches what it loaded stops writing; its own status line
+// stays as it was until it restarts.
+const SELF_FILE = (() => {
+  try {
+    return fileURLToPath(import.meta.url);
+  } catch {
+    return undefined;
+  }
+})();
+const SELF_SOURCE = readSelf();
+
+function readSelf() {
+  try {
+    return SELF_FILE ? readFileSync(SELF_FILE, "utf8") : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function ompBin() {
   const exe = process.execPath ?? "";
@@ -489,6 +513,7 @@ async function writeLines(state) {
   // Unchanged data is still rewritten now and then, so generatedAt tells readers the file is live.
   const now = Date.now();
   if (body === state.writtenLines && now - state.writtenAt < LINES_REFRESH_MS) return;
+  if (SELF_SOURCE !== undefined && readSelf() !== SELF_SOURCE) return;
   mkdirSync(dirname(LINES_FILE), { recursive: true });
   const tmp = `${LINES_FILE}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ generatedAt: now, models: entries, providers }));
