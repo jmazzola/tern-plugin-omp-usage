@@ -26,6 +26,8 @@ Hover it for each window's meter, reset time and saved resets:
 - **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
   share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
+- **Installs from Tern**: Preferences › Plugins › Install, or `tern plugin install`; it sets up its omp extension
+  itself.
 - **Updates itself** like Tern does: an **Update omp Usage** pill in the status line, one click to see what's new
   and install it. Nothing pops up over your work.
 
@@ -34,47 +36,64 @@ Hover it for each window's meter, reset time and saved resets:
 | Part | What it does |
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension: fetches `omp usage --json`, sets the line as an extension status, and caches every model's and provider's line. |
-| `omp-usage/` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. |
+| `plugin.toml`, `window.luau`, `update.luau`, `bar.css` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. Installed from Tern, it also puts the omp extension in `~/.omp/agent/extensions`. |
 
-Tested with Tern 0.9.14 and omp 18.18.6 on Windows.
+Tested with Tern 0.9.18 and omp 18.19.0 on Windows.
 
 ## Install
 
 You need Tern with plugins on (Preferences › Plugins) and omp signed in to an account with limits (`omp usage`
-should list them). Use forward slashes in paths, even on Windows.
+should list them).
 
-1. **Clone** to a folder you'll keep; Tern and omp load the files from there:
-
-   ```sh
-   git clone https://github.com/jmazzola/tern-plugin-omp-usage.git
-   cd tern-plugin-omp-usage
-   ```
-
-2. **Link the plugin.** `tern plugin list` should show `omp-usage … ready`; Tern loads it on every launch.
+1. **Install the plugin.** In Tern's Preferences › Plugins › Install, enter
+   `github.com/jmazzola/tern-plugin-omp-usage` and click **Install**. Or, from a terminal:
 
    ```sh
-   tern plugin link ./omp-usage
-   tern plugin list
+   tern plugin install github.com/jmazzola/tern-plugin-omp-usage
    ```
 
-3. **Load the extension** in `~/.omp/agent/config.yml`, with your clone's path:
+   Within seconds it writes the omp extension to `~/.omp/agent/extensions/usage-remaining.js`, where omp loads it
+   without config, and a toast says **omp Usage is installed**.
+
+2. **Show extension statuses** in omp's bar, where the plugin reads the line. Either:
 
    ```yaml
-   extensions:
-     - C:/Users/you/tern-plugin-omp-usage/omp/extensions/usage-remaining.js
-   ```
-
-4. **Show extension statuses** in omp's bar, where the plugin reads the line. Either:
-
-   ```yaml
+   # ~/.omp/agent/config.yml
    statusLine:
      showHookStatus: true
    ```
 
    or, with `preset: custom`, add `status` to `leftSegments`.
 
-5. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` (below it in Spine)
+3. **Restart omp sessions.** Click into an omp pane and the line appears above `1% ──── 1M` (below it in Spine)
    within seconds.
+
+### From a clone
+
+To work on the plugin, clone the repo and link it instead; Tern and omp then load the files from your clone. Use
+forward slashes in paths, even on Windows.
+
+```sh
+git clone https://github.com/jmazzola/tern-plugin-omp-usage.git
+cd tern-plugin-omp-usage
+tern plugin link .
+```
+
+Then load the extension from the clone in `~/.omp/agent/config.yml`, and do steps 2 and 3 above:
+
+```yaml
+extensions:
+  - C:/Users/you/tern-plugin-omp-usage/omp/extensions/usage-remaining.js
+```
+
+An installed copy doesn't write its extension while `config.yml` already loads one, so omp never runs it twice.
+
+> [!WARNING]
+> **The `omp-usage` folder is deprecated.** Since 0.5.0 the plugin is the repo itself. Clones linked to
+> `…/tern-plugin-omp-usage/omp-usage` (the old install) link the repo folder by themselves when they update to 0.5.0,
+> with a toast saying so; if the toast says it couldn't, run `tern plugin link .` in the repo folder. The folder
+> goes away in a later release, after which a clone still linked to it stops loading. `tern plugin list` shows which
+> folder yours uses.
 
 ## Settings
 
@@ -149,8 +168,9 @@ started before the extension was updated stops writing it, so it can't put back 
 
 ## Update
 
-The plugin checks your clone's remote every 6 hours (Hourly, Daily, Weekly or Off in the panel). When there's a new
-version, a toast says so once and an **Update omp Usage** pill sits in the status line until you deal with it:
+The plugin checks its repo every 6 hours (Hourly, Daily, Weekly or Off in the panel): a clone's remote, or for an
+installed copy a copy of the repo it keeps in its data folder. When there's a new version, a toast says so once and
+an **Update omp Usage** pill sits in the status line until you deal with it:
 
 <img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line" width="638">
 
@@ -159,7 +179,7 @@ and every new commit in full.
 
 | Button | What it does |
 | --- | --- |
-| **Download Update** | Fast-forwards the clone and reloads the plugin; the toast says if omp sessions need a restart |
+| **Download Update** | Brings the plugin (and an installed copy's omp extension) up to date and reloads it; the toast says if omp sessions need a restart |
 | **Skip This Version** | Hides the pill until a newer plugin change |
 | **Not Now** / Esc | Closes the card; the pill stays |
 
@@ -167,31 +187,35 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 
 <img src="docs/images/update-landing.png" alt="Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0" width="778">
 
-- Only commits that change `omp-usage/` or `omp/` count; README-only pushes don't light the pill and come along with
+- Commits that change only the README, its pictures or `.omp/` don't count; they don't light the pill and come along with
   the next real update.
-- It never merges or rebases your work. With local commits, or edits in the way, update by hand:
+- It never merges or rebases your work in a clone. With local commits, or edits in the way, update by hand:
   `git pull`, then `tern plugin reload`.
+- Clones linked to the deprecated `omp-usage` folder link the repo folder when they update: see [From a clone](#from-a-clone).
+- Updates need git on `PATH`, installed copies too.
+- An installed copy updates from the repo its `upstream` file names; a fork puts its own URL there.
 
 ## Turn it off
 
-| To | Do |
-| --- | --- |
-| Turn the plugin off | `tern plugin unlink omp-usage`, or Preferences › Plugins |
-| Turn it back on | `tern plugin link ./omp-usage` from the repo folder |
-| Remove the extension | Delete its line from `~/.omp/agent/config.yml`, then restart omp |
+| To | Installed | From a clone |
+| --- | --- | --- |
+| Turn the plugin off | Preferences › Plugins | `tern plugin unlink omp-usage`, or Preferences › Plugins |
+| Turn it back on | Preferences › Plugins | `tern plugin link .` from the repo folder |
+| Remove it | `tern plugin remove omp-usage`, then delete `~/.omp/agent/extensions/usage-remaining.js` and restart omp | `tern plugin unlink omp-usage`, then delete the extension's line from `~/.omp/agent/config.yml` and restart omp |
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
 | `tern plugin list` isn't `ready` | It prints the error; Tern's log is `%LOCALAPPDATA%\Tern\Logs\tern.log` |
-| No line | Focused pane is omp; its provider has limits; omp restarted after install; extension statuses on (step 4) |
+| No line | Focused pane is omp; its provider has limits; omp restarted after install; extension statuses on (step 2); `~/.omp/agent/extensions/usage-remaining.js` there (installed) or `extensions:` in `config.yml` naming it (clone) |
 | All/Selected show only the current model | The cache is stale: restart omp sessions |
 | The card's reset dates flip between two values | An omp session from before an update is still writing the cache: restart omp sessions |
 | Ctrl+Alt+U does nothing | Another binding took it; bind `plugin.omp-usage.panel` to another chord |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |
 | No update pill | Turn Tern's status bar on, or use the panel's Updates section; checks may be Off |
-| `omp Usage can't check for updates` | Needs a git clone tracking a remote, and git on `PATH`; the toast shows git's reason |
+| `omp Usage can't check for updates` | Needs git on `PATH` and, for a clone, a branch tracking a remote; the toast shows git's reason |
+| `omp Usage can't tell which version it is` | The repo its `upstream` file names has no commit at the installed version: a fork puts its own URL in `upstream` |
 | Edits to `window.luau` don't show | `tern plugin reload` |
 
 Don't edit Tern's `settings.json` from PowerShell: it adds a BOM and Tern falls back to defaults.

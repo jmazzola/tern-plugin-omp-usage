@@ -1,8 +1,7 @@
 schema = 1
 id = "omp-usage"
 name = "omp Usage"
-version = "0.4.4"
-description = "omp's usage-remaining status, above the omp composer's context hairline."
+version = "0.5.0"
+description = "Moved to the repo's root: links it there."
 icon = "gauge"
 window = "window.luau"
-styles = ["bar.css"]
