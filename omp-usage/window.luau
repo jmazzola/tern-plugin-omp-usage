@@ -36,8 +36,9 @@
 -- can't set on omp's nodes, and it shows the nearest `title` up the tree, so neither can hang off the meter
 -- (its context tooltip would show too). The hover target is the composer's attachment-chips row instead: empty
 -- and hidden unless something is attached, untitled all the way up, and a direct child of the composer like the
--- meter, so it can be laid over the line with the meter's own offsets. While attachments show, the line stays
--- but doesn't react to hover.
+-- meter, so it can be laid over the line with the meter's own offsets. While attachments show, the target is the
+-- first chip's end slot, as empty, hidden and untitled up the tree; the row stops clipping it and the chip stops
+-- being its containing block, so it lies over the line with the same offsets, and hovering the chip doesn't count.
 --
 -- When a window's share changes (a window is its provider and its label, so switching providers or modes
 -- doesn't count), the line prints again, left to right, while a comet runs each changed bar to its new level
@@ -1577,8 +1578,14 @@ local function tips(line: Line, strength: number): Layers
 	return layers
 end
 
--- The hover target: the composer's empty chips row (see the header), laid over the usage line.
-local HOST = "%s.sf-col[data-role^='omp.editor'] > .sf-row[data-role='omp.composer.chips']:is(.sf-hidden, .sf-void)"
+-- The hover target (see the header), laid over the usage line: the composer's chips row while it's empty, or the
+-- first attachment chip's empty end slot while attachments show.
+local CHIPS = ".sf-col[data-role^='omp.editor'] > .sf-row[data-role='omp.composer.chips']"
+local HOST = ":is("
+	.. CHIPS
+	.. ":is(.sf-hidden, .sf-void), "
+	.. CHIPS
+	.. " > .sf-card:first-child > .sf-card-head > .sf-card-end:is(.sf-hidden, .sf-void))"
 -- Spine's `--sp-side` (Tern's `max(calc(var(--sp-pad) + var(--tv-px, 0px)), calc(50% - 420px))` on the dock, with
 -- `--sp-pad` its `max(16px, min(40px, 4%))`) for the column's box, used from the meter, which is that box less its
 -- 16px right inset: both percentages are taken of `100% + 16px`.
@@ -1599,7 +1606,7 @@ end
 -- The target in the line's pane; `region` narrows it by a class of the surface region (`.sf-chat-reader`,
 -- `.sf-still`), which sits between the pane and the composer.
 local function host(region: string?): string
-	return line_pane .. " " .. string.format(HOST, if region then region .. " " else "")
+	return line_pane .. " " .. (if region then region .. " " else "") .. HOST
 end
 
 -- The providers' colors as variables on the composer, which the line, its tips, the capsule and the card all
@@ -1690,6 +1697,14 @@ $METER_SPINE::after {
 	top: calc(100% + 4px);
 	bottom: auto;
 	margin-bottom: 0;
+}
+/* with attachments the target is the first chip's end slot: the row doesn't clip it, and the chip isn't its
+   containing block, so it is placed from the composer, as the empty row is */
+$CHIPS {
+	overflow: visible;
+}
+$CHIPS > .sf-card:first-child {
+	position: static;
 }
 /* the hover target over the line: the meter's place in each chat style, widened by the capsule's 6px pad, as
    long as the line (or the meter, if that's shorter) */
@@ -1792,6 +1807,7 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 		METER = meter(),
 		METER_SPINE = meter(".sf-chat-spine"),
 		SPINE_SIDE = SPINE_SIDE,
+		CHIPS = line_pane .. " " .. CHIPS,
 		HOST = host(nil),
 		HOST_READER = host(".sf-chat-reader"),
 		HOST_SPINE = host(".sf-chat-spine"),
