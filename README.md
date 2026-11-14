@@ -22,7 +22,9 @@ Hover it for each window's meter, reset time and saved resets:
   together. Switch any account off to leave it out. Accounts go by the part of their email before the `@`; seats that share it add their domain
   (`claude-team@lumen`, `claude-team@pinegg`).
 - **A hover summary that fits.** You set how many rows it may take (26 by default); past that, accounts sum
-  up to a row each, then fold into one (`+4 more accounts · lowest 7D 5%`).
+  up to a row each, then fold into one (`+4 more accounts · lowest 7D 5%`). An account's plan rides on its
+  heading as a gold pill (`Pro 20x`), and a window with an estimate shows the tokens and API-equivalent value
+  it has left under its bar (`633.04M`, `$533.10`).
 - **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
   share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
 - **CPA and Keeper quota sources.** Read CLIProxyAPI credentials directly, or use CPA Usage Keeper's cached
@@ -30,8 +32,8 @@ Hover it for each window's meter, reset time and saved resets:
 - **Native quota details.** A Tern-native view with readable value typography, rounded quota bars, plan
   badges, and **Observed usage** / **Estimated remaining** metrics. Open it with **Ctrl+Alt+Shift+U**, `usage`
   in the widget bar's **Plugin segments**, or the palette. Estimates describe the remaining workload, not
-  official token allowances or cash balances. The hover stays a compact summary; full details scroll and
-  adapt to narrow windows.
+  official token allowances or cash balances. The hover keeps to the estimates; observed usage, observation
+  time and every other quantity are in the details, which scroll and adapt to narrow windows.
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
 - **Updates itself** like Tern does: an **Update omp Usage** pill in the widget bar's **Plugin segments** widget,
   one click to see what's new and install it. Nothing pops up over your work.
@@ -224,7 +226,8 @@ never the time the plugin happened to read its cache.
 ### Quota coverage and estimate limits
 
 The compact line and hover remain percentage instruments with reset times, saved resets, and status
-warnings. The line itself takes no clicks: it is drawn over omp's composer, where Tern gives plugins no click
+warnings; the hover adds each window's estimated remaining tokens and API-equivalent value, and the plan.
+The line itself takes no clicks: it is drawn over omp's composer, where Tern gives plugins no click
 events. Open the full native view with **Ctrl+Alt+Shift+U** (rebind `plugin.omp-usage.details`), **usage**
 in the widget bar's **Plugin segments**, or **omp Usage: Quota details** in the palette. The hover's last row
 names both shortcuts. In the view, **Settings** opens preferences and **Close** dismisses it; **Ctrl+Alt+U**
@@ -242,6 +245,11 @@ and red remain reserved for low quotas, stale observations and errors. Plan ids 
 Real Keeper quota-cache replay in Tern's Titanium dark theme (a real window, enlarged to 2×):
 
 <img src="docs/images/card-summary.png" alt="Native Tern quota details: Codex@dashboard usage with a Pro 20x plan badge, a rounded weekly quota bar at 71% left, its saved reset and reset time, observed usage of 258.57M tokens and estimated remaining 633.04M tokens with their API-equivalent values, the observation time and the estimate disclaimer" width="714">
+
+The same source's hover summary: under the weekly bar, the estimated tokens left (`633.04M`) and their
+API-equivalent value (`$533.10`), each after its icon, and the plan as a pill on the title row:
+
+<img src="docs/images/hover-summary.png" alt="Quota hover summary over the usage line: Codex@dashboard usage with a gold Pro 20x pill, the weekly window at 71% left, under its bar a tokens icon with 633.04M and a dollar icon with $533.10, then one saved reset, the reset time and a last row naming the details and settings shortcuts" width="348">
 
 | Information | Display and boundary |
 | --- | --- |
@@ -266,8 +274,9 @@ missing usage, zero recorded usage, and unrelated specialized counters do not es
 Direct CPA quota queries usually provide no token/cost observations, so they normally show no such estimate.
 The adapter does not add request-statistics collection just to manufacture one.
 
-The hover still folds accounts to fit its row budget; the native details view scrolls instead. Both honor
-the same provider, account and window selections. Combined and By plan keep percentage averages;
+The hover still folds accounts to fit its row budget (an estimate row counts toward it); the native details
+view scrolls instead. Both honor the same provider, account and window selections. Combined and By plan keep
+percentage averages;
 per-account quantities and estimates are **not** averaged or added across unlike plans. Switch to All
 accounts or one account for those details.
 
@@ -291,7 +300,7 @@ Open the panel with **Ctrl+Alt+U** (rebind `plugin.omp-usage.panel`), **Settings
 
 | Section | What it does |
 | --- | --- |
-| Preview | The line and its compact hover summary, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default; accounts fold when needed. Full quantities are in quota details, outside this row budget |
+| Preview | The line and its compact hover summary, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default; accounts fold when needed. Estimates under a bar take a row each; observed usage and other quantities are in quota details, outside this row budget |
 | Show | **Current model** (default), **All providers** (countdowns move to the hover summary), or **Selected providers**. With no listed quota data, falls back to available agent status/model data |
 | Providers | Pick a row up by its grip, then click where it goes; click a window to hide or show it everywhere; the switch adds the provider to Selected. With several accounts, each has its own row: grip, name (click it to show only that account, again for all), windows and a switch that takes it off the line and out of the hover summary and quota details. A chip beside the provider says what shows, with a button for the next way: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 6 with 5H, 4 without ✕` with **all in one**, or `only dev.ops ✕`; by plan, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`) |
@@ -404,7 +413,7 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 | External source returns 401/403 | CPA needs its management key; Keeper needs an administrator session, not an API-key viewer login |
 | No estimated tokens or equivalent value | Requires positive matched window usage and utilization; ordinary quota percentages alone are insufficient |
 | Quantities disappear in Combined/By plan | These modes do not aggregate unlike quantities; select All accounts or one account |
-| Token/cost values are absent from the hover | Open quota details (Ctrl+Alt+Shift+U, or `usage` in Plugin segments); the hover intentionally keeps the compact summary |
+| Token/cost values are absent from the hover | The hover shows only estimates, and only for windows that have one (see above); observed usage is in quota details (Ctrl+Alt+Shift+U, or `usage` in Plugin segments). Restart omp sessions after updating so plans read as names |
 | Clicking the line does nothing | Expected: Tern gives plugins no clicks on omp's composer. Use Ctrl+Alt+Shift+U, or place Tern's **Plugin segments** widget (palette › Edit widgets…) and click `usage` |
 | Ctrl+Alt+Shift+U does nothing | Another binding took it; bind `plugin.omp-usage.details` to another chord |
 | Quantities still appear as prose in quota details | Restart omp sessions to emit semantic quantity details, then run `tern plugin reload omp-usage`. Older cache rows and quantities without a matching percentage window remain readable as text |

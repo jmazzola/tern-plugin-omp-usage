@@ -21,6 +21,10 @@ export type Row = {
 	value: string?,
 	account_note: boolean?,
 	shared: boolean?,
+	-- hover only: a pill at the row's right end (an account's plan), and icons drawn over blank cells of the
+	-- row's text (`cell`: the first of the icon's three cells; `kind`: "tokens" or "cost")
+	badge: string?,
+	icons: { { cell: number, kind: string } }?,
 }
 
 type Amounts = { tokens: string?, cost: string? }

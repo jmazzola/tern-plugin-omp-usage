@@ -1,7 +1,7 @@
 schema = 1
 id = "omp-usage"
 name = "omp Usage"
-version = "0.6.0"
+version = "0.7.0"
 description = "Native, CLIProxyAPI and Keeper quotas with a compact hover summary and native quota details."
 icon = "gauge"
 window = "window.luau"

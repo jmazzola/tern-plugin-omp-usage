@@ -1958,6 +1958,10 @@ end
 -- that is too tall, the last of those rows fold into one, `+4 more accounts · lowest 7D 5%`. An account picked in
 -- the panel always shows its windows in full: it was picked to be seen. Only when it and the providers without
 -- accounts outgrow the limit on their own is the card taller (the panel says so).
+-- Under a window's meter, the estimates its details carry for that window (tokens and API-equivalent value
+-- left), each after its icon, as the writer formatted them; a plan its account names once rides on the
+-- account's heading (the title, for a provider alone on the card) as a pill. The native details view gets
+-- neither: it draws both itself.
 
 -- An account's windows on one row, each window's saved resets beside it as the line has them (`+NF` for Fable
 -- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`.
@@ -1982,6 +1986,48 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 		return card_rows
 	end
 	local now = now_ms()
+	-- The plan an account's details name, if they name exactly one (`account` nil: the provider's single account).
+	local function plan_of(details: { Detail }, account: string?): string?
+		local plan: string? = nil
+		for _, detail in details do
+			if detail.kind == "plan" and detail.value and detail.window == nil and detail.account == account then
+				if plan and plan ~= detail.value then return nil end
+				plan = detail.value
+			end
+		end
+		return plan
+	end
+	-- A window's estimates on one row, short (`633.04M`, `$533.10`): the icon names the unit, so `tokens` goes
+	-- and a USD amount takes `$`. Each icon covers three blank cells (the cost's `$` glyph in its middle one).
+	local function estimate_row(details: { Detail }, account: string?, window: string): Row?
+		local tokens: string?, cost: string? = nil, nil
+		for _, detail in details do
+			if detail.window == window and detail.account == account and detail.value then
+				if detail.kind == "tokens-estimate" and tokens == nil then
+					tokens = (string.gsub(detail.value :: string, " tokens$", ""))
+				elseif detail.kind == "cost-estimate" and cost == nil then
+					cost = (string.gsub(detail.value :: string, "^USD ", "$"))
+				end
+			end
+		end
+		if tokens == nil and cost == nil then
+			return nil
+		end
+		local text = ""
+		local icons: { { cell: number, kind: string } } = {}
+		if tokens then
+			table.insert(icons, { cell = 0, kind = "tokens" })
+			text = "    " .. (tokens :: string)
+		end
+		if cost then
+			if text ~= "" then
+				text ..= "   "
+			end
+			table.insert(icons, { cell = glyph_count(text), kind = "cost" })
+			text ..= " $  " .. (cost :: string)
+		end
+		return { text = text, color = "var(--oc-head)", icons = icons }
+	end
 	-- an account's (or provider's) rows in full, by group and run: the same in every build, so made once
 	local done: { [string]: { Row } } = {}
 	-- `full`: how many accounts, in the line's order, show their windows; of the rest, `keep` get a row each (the
@@ -1996,8 +2042,16 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 		for g, group in model.groups do
 			local accent = group_color(g, "a")
 			local first = group.windows[1]
+			local hover = fixed ~= "details"
 			if several and not (first and first.lead) then
-				table.insert(rows, { text = group.label, color = accent, heading = true })
+				table.insert(rows, {
+					text = group.label,
+					color = accent,
+					heading = true,
+					badge = if hover then plan_of(group.details or {}, nil) else nil,
+				})
+			elseif hover and not several then
+				rows[1].badge = plan_of(group.details or {}, nil)
 			end
 			local resets = group.resets or {}
 			local function add_resets(into: { Row }, label: string): boolean
@@ -2110,6 +2164,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 							color = accent,
 							rule = r > 1,
 							heading = true,
+							badge = if hover then plan_of(details, run.name) else nil,
 						})
 					end
 					for _, window in run.windows do
@@ -2123,6 +2178,10 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 							a = a,
 							b = b,
 						})
+						local estimates = if hover then estimate_row(details, run.name, window.label) else nil
+						if estimates then
+							table.insert(new, estimates)
+						end
 						if window.covers then
 							table.insert(new, { text = CARD_INDENT .. (window.covers :: string), color = "var(--oc-mute)" })
 						end
@@ -2311,17 +2370,25 @@ local CARD_KEYFRAMES = [==[
 -- The card's sheet for its rows. By default it is the hover target's `::after` over the line, rising into place
 -- after a beat; `target` (the settings panel's preview) draws the same card, still, on another element.
 local function card_css(rows: { Row }, target: string?): string
+	-- the card's 11px mono glyphs are 6.6px wide; the estimate icons' colors (tokens, API-equivalent value) and
+	-- the plan pill's gold
+	local GLYPH_W = 6.6
+	local TOKENS_ICON, COST_ICON = "light-dark(#4f5bd5, #8b95ff)", "var(--ok)"
+	local PLAN_A, PLAN_B = "light-dark(#b7791f, #f6c453)", "light-dark(#975a16, #d69e2e)"
 	local width = 28
 	for _, row in rows do
 		local n = glyph_count(row.text)
 		if row.right then
 			n += 4 + glyph_count(row.right :: string)
 		end
+		if row.badge then
+			n += 4 + glyph_count(row.badge :: string)
+		end
 		width = math.max(width, n)
 	end
 	local lines: { string } = {}
 	local paint: { string } = {}
-	-- Tern draws one text-clipped layer. The remaining layers are the compact meters and title band.
+	-- Tern draws one text-clipped layer. The remaining layers are the compact meters, pills, icons and title band.
 	local images: { string } = { "" }
 	local positions: { string } = { "0 0" }
 	local sizes: { string } = { "100% 100%" }
@@ -2342,6 +2409,10 @@ local function card_css(rows: { Row }, target: string?): string
 		if row.right then
 			local right = row.right :: string
 			text ..= string.rep(" ", width - glyph_count(row.text) - glyph_count(right)) .. right
+		end
+		if row.badge then
+			local badge = row.badge :: string
+			text ..= string.rep(" ", width - glyph_count(row.text) - glyph_count(badge) - 1) .. badge .. " "
 		end
 		if row.right then
 			local a = row.a or "var(--accent)"
@@ -2383,6 +2454,60 @@ local function card_css(rows: { Row }, target: string?): string
 				"100% 1px",
 				"100% 1px",
 				"content-box"
+			)
+		end
+		-- the plan pill: the badge's text and a cell either side, ringed in gold with a glow, measured from the
+		-- right edge where the text's last cell ends (`calc(100% - Npx)` puts a layer's right edge N px in)
+		if row.badge then
+			local w = (glyph_count(row.badge :: string) + 2) * GLYPH_W
+			local r = 7
+			local top = y + 2
+			local function at(right: number, down: number): string
+				return string.format("calc(100%% %s %spx) %spx", if right < 0 then "+" else "-", num(math.abs(right)), num(top + down))
+			end
+			local edge = string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 80), faded(PLAN_B, 80))
+			local rim = string.format("%spx 1px", num(w - 2 * r))
+			layer(edge, at(r, 0), rim, rim, "content-box")
+			layer(edge, at(r, 2 * r - 1), rim, rim, "content-box")
+			for _, cap in { { color = PLAN_A, side = "100%", right = w - r }, { color = PLAN_B, side = "0%", right = 0 } } do
+				local half = string.format("%spx %spx", num(r), num(2 * r))
+				layer(
+					string.format(
+						"radial-gradient(%spx %spx at %s 50%%, %s 0%%, %s 76%%, %s 84%%, %s 94%%, %s 100%%)",
+						num(r), num(r), cap.side,
+						faded(cap.color, 30), faded(cap.color, 30), faded(cap.color, 80), faded(cap.color, 80), faded(cap.color, 0)
+					),
+					at(cap.right, 0), half, half, "content-box"
+				)
+			end
+			local body = string.format("%spx %spx", num(w - 2 * r), num(2 * r))
+			layer(string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 30), faded(PLAN_B, 30)), at(r, 0), body, body, "content-box")
+			local glow = string.format("%spx %spx", num(w + 16), num(2 * r + 14))
+			layer(string.format("radial-gradient(closest-side, %s, %s)", faded(PLAN_A, 22), faded(PLAN_A, 0)), at(-8, -7), glow, glow, "content-box")
+		end
+		-- an estimate's icon: a tinted disc ringed in its color over the icon's middle cell; the tokens icon
+		-- draws its lines in the text's color (the cost icon's `$` is a glyph of the row)
+		for _, icon in row.icons or {} do
+			local color = if icon.kind == "tokens" then TOKENS_ICON else COST_ICON
+			local cx = (icon.cell + 1.5) * GLYPH_W
+			local cy = y + CARD_ROW / 2
+			if icon.kind == "tokens" then
+				for k, length in { 5, 5, 3 } do
+					local size = string.format("%spx 1px", num(length))
+					layer(
+						string.format("linear-gradient(%s, %s)", solid("var(--oc-head)"), solid("var(--oc-head)")),
+						string.format("%spx %spx", num(cx - 2.5), num(cy + (k - 2) * 2.5 - 0.5)),
+						size, size, "content-box"
+					)
+				end
+			end
+			layer(
+				string.format(
+					"radial-gradient(closest-side, %s 0%%, %s 72%%, %s 80%%, %s 92%%, %s 100%%)",
+					faded(color, 22), faded(color, 22), solid(color), solid(color), faded(color, 0)
+				),
+				string.format("%spx %spx", num(cx - 6.5), num(cy - 6.5)),
+				"13px 13px", "13px 13px", "content-box"
 			)
 		end
 		table.insert(lines, string.sub(css_string(text), 2, -2))
