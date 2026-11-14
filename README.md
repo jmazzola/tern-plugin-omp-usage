@@ -21,15 +21,20 @@ Hover it for each window's meter, reset time and saved resets:
   window's share their average and their saved resets added up, or **by plan**, the accounts with the same windows
   together. Switch any account off to leave it out. Accounts go by the part of their email before the `@`; seats that share it add their domain
   (`claude-team@lumen`, `claude-team@pinegg`).
-- **A card that fits.** You set how many rows it may take (26 by default); past that, accounts sum up to a row
-  each, then fold into one (`+4 more accounts · lowest 7D 5%`).
+- **A hover summary that fits.** You set how many rows it may take (26 by default); past that, accounts sum
+  up to a row each, then fold into one (`+4 more accounts · lowest 7D 5%`).
 - **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
   share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
 - **CPA and Keeper quota sources.** Read CLIProxyAPI credentials directly, or use CPA Usage Keeper's cached
   quota windows alongside native omp reports. Each source stays a separate account pool.
+- **Native quota details.** A Tern-native view with readable value typography, rounded quota bars, plan
+  badges, and **Observed usage** / **Estimated remaining** metrics. Open it with **Ctrl+Alt+Shift+U**, `usage`
+  in the widget bar's **Plugin segments**, or the palette. Estimates describe the remaining workload, not
+  official token allowances or cash balances. The hover stays a compact summary; full details scroll and
+  adapt to narrow windows.
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
-- **Updates itself** like Tern does: an **Update omp Usage** pill in the status line, one click to see what's new
-  and install it. Nothing pops up over your work.
+- **Updates itself** like Tern does: an **Update omp Usage** pill in the widget bar's **Plugin segments** widget,
+  one click to see what's new and install it. Nothing pops up over your work.
 
 <img src="docs/images/update-card.png" alt="The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now" width="991">
 
@@ -37,10 +42,11 @@ Hover it for each window's meter, reset time and saved resets:
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension: fetches native and configured external quotas, sets the line as an extension status, and caches every model's and provider's line and details. |
 | `omp/extensions/usage-sources/` | CLIProxyAPI and Keeper clients, source configuration, observation freshness, and semantic quantity/estimate formatting. |
-| `omp-usage/` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. |
+| `omp-usage/` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds native quota details, the settings panel and updates. |
 
-Tested with Tern 0.9.14 and omp 18.18.6 on Windows. Source checks use local HTTP fixtures; a fixture is not a
-live deployment test.
+The original native display was tested with Tern 0.9.14 and omp 18.18.6 on Windows. Source checks use local
+HTTP fixtures; native quota details are checked on Linux with Node 26.13.1, omp 18.18.9, and Tern 0.9.18 using
+redacted quota-cache replays in the real renderer. A replay is not a live deployment test.
 
 ## Install
 
@@ -197,8 +203,7 @@ The direct adapter targets the documented v8 management API. It lists every cred
 upstream quota through `/v8/management/requests/api-call` with CPA's `$TOKEN$` substitution. It does not
 download OAuth tokens, consume reset credits, clear cooldowns, change credentials, or drain usage queues.
 Built-in queries cover Codex, Claude, Gemini CLI, Antigravity, Kimi, and xAI; installed quota provider plugins
-can supply other normalized quota groups and summaries. Unsupported credentials report an error
-instead of a meter.
+can supply other normalized quota groups and summaries. Unsupported credentials are identified in quota details.
 
 A management key has broad privileges, including access to credential downloads even though this adapter
 never calls them. Keep it private; do not expose CPA's management interface publicly.
@@ -216,6 +221,56 @@ refresh. With `refresh: true`, the plugin may enqueue `/api/v1/quota/refresh`, w
 requests. The next external poll reads completed results. Source freshness uses Keeper's `refreshed_at`,
 never the time the plugin happened to read its cache.
 
+### Quota coverage and estimate limits
+
+The compact line and hover remain percentage instruments with reset times, saved resets, and status
+warnings. The line itself takes no clicks: it is drawn over omp's composer, where Tern gives plugins no click
+events. Open the full native view with **Ctrl+Alt+Shift+U** (rebind `plugin.omp-usage.details`), **usage**
+in the widget bar's **Plugin segments**, or **omp Usage: Quota details** in the palette. The hover's last row
+names both shortcuts. In the view, **Settings** opens preferences and **Close** dismisses it; **Ctrl+Alt+U**
+still opens settings directly.
+
+Tern shows plugin segments only in the **Plugin segments** widget, which you place yourself (palette ›
+**Edit widgets…**); `usage` shows there while an omp pane has focus.
+
+When a window reports tokens or API-equivalent cost, details show **Observed usage** and, only when
+available, **Estimated remaining**. The quota bar stays tied to the reported percentage, not an invented
+token capacity. Plan and observation time remain visible. Normal estimates use neutral styling; amber
+and red remain reserved for low quotas, stale observations and errors. Plan ids read as names
+(`pro-20x` shows as `Pro 20x`); a plan the source already capitalizes stays as reported.
+
+Real Keeper quota-cache replay in Tern's Titanium dark theme (a real window, enlarged to 2×):
+
+<img src="docs/images/card-summary.png" alt="Native Tern quota details: Codex@dashboard usage with a Pro 20x plan badge, a rounded weekly quota bar at 71% left, its saved reset and reset time, observed usage of 258.57M tokens and estimated remaining 633.04M tokens with their API-equivalent values, the observation time and the estimate disclaimer" width="714">
+
+| Information | Display and boundary |
+| --- | --- |
+| Remaining percentages, scopes and reset times | Existing meters, including separate model/group windows; missing fields never become 0% or 100% |
+| Reported absolute quantities | Full details retain remaining/used/limit with the supplied unit and currency; opaque credits are not relabeled as tokens |
+| Window tokens and API-equivalent cost | Observed usage for that exact account/window, retaining units and currency; Keeper may derive it from locally recorded requests and its price catalog |
+| Estimated remaining tokens | Estimated remaining: `observed window tokens × remaining fraction / used fraction`; only for eligible matched windows with positive observed usage and positive used fraction |
+| Estimated API-equivalent value | Paired with observed cost in the same currency; not cash, subscription price, or a guaranteed spend allowance |
+| Missing, stale or rolled-over observations | Visible warning/error notes and observation time; stale snapshots do not produce meters or estimates, and missing metrics are omitted rather than filled with zeros |
+| Request permission and exhausted status | Explicit `allowed`/`limitReached` facts where supplied, including rows with no reported percentage |
+| Saved resets | Read-only Codex credits and Claude grants where supplied; unmatched scoped grants remain details, with no redemption controls |
+| Provider/plugin summaries | Explicit labels and units in quota details; no synthetic percentage without a denominator |
+| Historical request charts and billing ledgers | Not recreated here; use CPA/Keeper's own interface. Native details add no history collection or extra API requests |
+
+All/Selected providers include every external-source model/group window, even when its upstream model id
+is not in omp's model list. Current model applies the reported scopes to the model id; `modelMappings`
+selects a quota pool, not CPA's upstream model alias routing.
+
+Estimates assume the observed workload mix remains representative. Different models, cache rates, quota
+weights, incomplete Keeper ingestion and rounded utilization can make them inaccurate. Zero utilization,
+missing usage, zero recorded usage, and unrelated specialized counters do not establish an estimate.
+Direct CPA quota queries usually provide no token/cost observations, so they normally show no such estimate.
+The adapter does not add request-statistics collection just to manufacture one.
+
+The hover still folds accounts to fit its row budget; the native details view scrolls instead. Both honor
+the same provider, account and window selections. Combined and By plan keep percentage averages;
+per-account quantities and estimates are **not** averaged or added across unlike plans. Switch to All
+accounts or one account for those details.
+
 ### Development checks
 
 The adapters use built-in HTTP APIs and need no package installation. Run their deterministic parsing,
@@ -231,14 +286,14 @@ service URL, the matching credential environment variables, and a fresh upstream
 
 ## Settings
 
-Open the panel with **Ctrl+Alt+U** (rebind `plugin.omp-usage.panel`), **usage** in the status bar, or **omp Usage:
-Settings panel** in the palette. Changes apply at once, in every window.
+Open the panel with **Ctrl+Alt+U** (rebind `plugin.omp-usage.panel`), **Settings** in quota details, or
+**omp Usage: Settings panel** in the palette. Changes apply at once, in every window.
 
 | Section | What it does |
 | --- | --- |
-| Preview | The line and its card, drawn as the composer draws them for the last omp pane you used (the line ends where the panel does). Under it, **Card height**: 16 to 50 rows, 26 by default, a row being 18px; a warning says when a card can't fold down to it |
-| Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers** |
-| Providers | Pick a row up by its grip, then click where it goes; click a window to hide or show it everywhere; the switch adds the provider to Selected. With several accounts, each has its own row: grip, name (click it to show only that account, again for all), windows and a switch that takes it off the line and out of the card. A chip beside the provider says what shows, with a button for the next way: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 6 with 5H, 4 without ✕` with **all in one**, or `only dev.ops ✕`; by plan, each account's row is tagged with its group (`5H`, `no 5H`) |
+| Preview | The line and its compact hover summary, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default; accounts fold when needed. Full quantities are in quota details, outside this row budget |
+| Show | **Current model** (default), **All providers** (countdowns move to the hover summary), or **Selected providers**. With no listed quota data, falls back to available agent status/model data |
+| Providers | Pick a row up by its grip, then click where it goes; click a window to hide or show it everywhere; the switch adds the provider to Selected. With several accounts, each has its own row: grip, name (click it to show only that account, again for all), windows and a switch that takes it off the line and out of the hover summary and quota details. A chip beside the provider says what shows, with a button for the next way: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 6 with 5H, 4 without ✕` with **all in one**, or `only dev.ops ✕`; by plan, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`) |
 | External quota sources | Configured in `~/.omp/agent/usage-sources.json`, not in the panel; each source's provider/account pool appears under Providers |
 | Updates | Status, **Check for Updates** or **Download Update**, and how often to check (see [Update](#update)) |
@@ -304,9 +359,11 @@ started before the extension was updated stops writing it, so it can't put back 
 ## Update
 
 The plugin checks your clone's remote every 6 hours (Hourly, Daily, Weekly or Off in the panel). When there's a new
-version, a toast says so once and an **Update omp Usage** pill sits in the status line until you deal with it:
+version, a toast says so once and an **Update omp Usage** pill sits in the widget bar's **Plugin segments** widget
+until you deal with it. Tern shows plugin segments only in that widget, so place it once (palette › **Edit
+widgets…**); without it, use the panel's Updates section:
 
-<img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line" width="638">
+<img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill as an earlier Tern drew it in the status line; current Tern shows it in the Plugin segments widget" width="638">
 
 Click it (or **Check for Updates**) for the update card shown at the top: the version available, the one you have,
 and every new commit in full.
@@ -345,9 +402,15 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 | External source appears only in All/Selected | Add a `modelMappings` entry for the omp provider/model; an OpenAI-compatible endpoint does not identify its backing quota provider |
 | External source shows stale or not refreshed | Check the observation time. For Keeper, turn on its scheduled quota refresh (gear button in Keeper's Auth Files inspection dialog) with an interval under `maxAgeSeconds` (10 minutes by default), or opt into `refresh`; then wait for the next poll |
 | External source returns 401/403 | CPA needs its management key; Keeper needs an administrator session, not an API-key viewer login |
+| No estimated tokens or equivalent value | Requires positive matched window usage and utilization; ordinary quota percentages alone are insufficient |
+| Quantities disappear in Combined/By plan | These modes do not aggregate unlike quantities; select All accounts or one account |
+| Token/cost values are absent from the hover | Open quota details (Ctrl+Alt+Shift+U, or `usage` in Plugin segments); the hover intentionally keeps the compact summary |
+| Clicking the line does nothing | Expected: Tern gives plugins no clicks on omp's composer. Use Ctrl+Alt+Shift+U, or place Tern's **Plugin segments** widget (palette › Edit widgets…) and click `usage` |
+| Ctrl+Alt+Shift+U does nothing | Another binding took it; bind `plugin.omp-usage.details` to another chord |
+| Quantities still appear as prose in quota details | Restart omp sessions to emit semantic quantity details, then run `tern plugin reload omp-usage`. Older cache rows and quantities without a matching percentage window remain readable as text |
 | Ctrl+Alt+U does nothing | Another binding took it; bind `plugin.omp-usage.panel` to another chord |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |
-| No update pill | Turn Tern's status bar on, or use the panel's Updates section; checks may be Off |
+| No update pill | Place Tern's **Plugin segments** widget (palette › Edit widgets…), or use the panel's Updates section; checks may be Off |
 | `omp Usage can't check for updates` | Needs a git clone tracking a remote, and git on `PATH`; the toast shows git's reason |
 | Edits to `window.luau` don't show | `tern plugin reload` |
 

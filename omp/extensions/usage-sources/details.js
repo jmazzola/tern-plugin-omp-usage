@@ -81,6 +81,14 @@ export function limitDetails(limit, { estimates = true, includeShare = false } =
   return rows;
 }
 
+// Sources report plan ids (`pro-20x`, `plus`); they read as plan names (`Pro 20x`). A name the source already
+// cased (`Team Plan`) stays as reported.
+function planLabel(value) {
+  const plan = cleanText(value);
+  if (plan !== plan.toLowerCase()) return plan;
+  return plan.split(/[-_\s]+/).filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
+}
+
 export function reportNotes(report) {
   const rows = [];
   if (report.stale) {
@@ -92,7 +100,7 @@ export function reportNotes(report) {
   }
   if (report.error) rows.push({ text: cleanText(report.error), kind: "error" });
   if (report.metadata?.plan) {
-    const plan = cleanText(report.metadata.plan);
+    const plan = planLabel(report.metadata.plan);
     rows.push({ text: `Plan: ${plan}`, kind: "plan", valueText: plan });
   }
   for (const item of report.summary ?? []) {
