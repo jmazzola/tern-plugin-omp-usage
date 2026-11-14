@@ -98,10 +98,10 @@ local HEAD_W, HEAD_H = 18, 7
 local TRAIL_W, TRAIL_H = 34, 2
 local RUN_SET, RUN_ARRIVE, RUN_FLARE = 0.05, 0.6, 0.72
 local RUN_STOPS = { 0, 0.05, 0.12, 0.2, 0.28, 0.36, 0.44, 0.52, 0.6, 0.66, 0.72, 0.84, 1 }
--- The card: 11px var(--mono) in 18px rows, at least 28 glyphs wide.
+-- The compact hover summary: 11px var(--mono) in 18px rows. Full quantities use native UI nodes.
 local CARD_ROW = 18
-local CARD_MIN = 28
 local CARD_INDENT = "  "
+local detail_view = require("./details")
 
 -- Providers, in the order the line lists them (anything else follows, by label), and the extension's one-word
 -- labels for them.
@@ -200,6 +200,10 @@ local COMBINED_PLANS = "\1plans"
 -- 7d`), and `lead` on the first window of each account, where the line and card name the account. Combined (see
 -- `combined`), a group's lead window's `plan` is its heading in the card, in place of its name, and a window only
 -- some of the group's accounts have says how many in `covers` (`5 of the 10 accounts`), under it in the card.
+-- A detail's `text` is always the readable row (older caches write only that). When the writer also says what
+-- the row is (`kind`) and the value it already formatted (`value`), the card can pair a window's observed
+-- amounts with its estimates; the text still stands in when a kind is unknown or a value is missing.
+type Detail = { text: string, account: string?, window: string?, kind: string?, value: string? }
 type Window = {
 	label: string,
 	pct: number,
@@ -215,7 +219,7 @@ type Window = {
 type Reset = { at: number, count: number, window: string? }
 -- A provider on the line: its key (provider id when known, else its label), label, windows and saved resets
 -- (nil when the cache has none for it); `rest`, while one of its accounts is chosen, the other accounts' windows.
-type Group = { key: string, id: string?, label: string, windows: { Window }, resets: { Reset }?, rest: { Window }? }
+type Group = { key: string, id: string?, label: string, windows: { Window }, resets: { Reset }?, rest: { Window }?, details: { Detail }? }
 -- What the line and card show, where it came from (a change counts only between two lines from the same
 -- source), and the card's title.
 type Model = {
@@ -229,8 +233,8 @@ type Model = {
 type Dock = { status: string?, chip: string?, viewing: boolean, hide: { string } }
 -- `windows`: every window the provider's accounts report, its plan's and those only some of its models have.
 -- `accounts`: with several, their names in omp's order (as the line's labels start); else empty.
-type Provider = { id: string, label: string, line: string, resets: { Reset }, windows: { Window }, accounts: { string } }
-type Entry = { line: string, resets: { Reset } }
+type Provider = { id: string, label: string, line: string, resets: { Reset }, windows: { Window }, accounts: { string }, details: { Detail }? }
+type Entry = { line: string, resets: { Reset }, provider: string?, details: { Detail }? }
 type Cache = { at: number, models: { [string]: Entry }, providers: { Provider }? }
 type Settings = {
 	mode: string,
@@ -245,9 +249,9 @@ type Settings = {
 }
 -- `moved`: the windows (by provider and label) whose share changed, and which way.
 type Pulse = { seq: number, until_ms: number, moved: { [string]: string } }
--- A card row: its text and color and, for a window, the share at its right and its meter's share and colors;
--- `rule` draws a hairline over it.
-type Row = { text: string, color: string, right: string?, share: number?, a: string?, b: string?, rule: boolean? }
+-- Both views consume the same scoped rows. The hover uses text/meters; the native details view also uses
+-- heading and semantic value fields, without parsing formatted labels or recalculating quota quantities.
+type Row = detail_view.Row
 
 local last_css: string? = nil
 local shown_pane: number? = nil
@@ -552,6 +556,8 @@ end
 -- resets are Fable resets, marked `+NF` on the line.
 local function is_fable(provider: string?, label: string): boolean
 	local key = string.lower(label)
+	-- an external source's provider keeps its own id after the source's (`keeper:dashboard:anthropic`)
+	provider = if provider then (string.match(provider, "^[^:]+:[^:]+:(.+)$") or provider) else nil
 	return provider == "anthropic" and (key == "fable 7d" or string.sub(key, -9) == " fable 7d")
 end
 
@@ -566,6 +572,51 @@ local function has_window(windows: { Window }, label: string): boolean
 	return false
 end
 
+-- The detail kinds the card understands. A kind it doesn't know (or one whose value is missing) leaves the row
+-- as text: an older writer, or a newer one with more to say, never loses what it already said.
+detail_view.kinds = {
+	["tokens-used"] = true,
+	["cost-used"] = true,
+	["tokens-estimate"] = true,
+	["cost-estimate"] = true,
+	plan = true,
+	observed = true,
+	stale = true,
+	error = true,
+}
+-- The kinds whose `value` is the fact itself, so without one they can only be text.
+detail_view.values = {
+	["tokens-used"] = true,
+	["cost-used"] = true,
+	["tokens-estimate"] = true,
+	["cost-estimate"] = true,
+	plan = true,
+	observed = true,
+}
+
+local function details_of(value: any): { Detail }
+	local details: { Detail } = {}
+	if type(value) == "table" then
+		for _, item in ipairs(value) do
+			if type(item) == "table" and type(item.text) == "string" and item.text ~= "" then
+				local kind = if type(item.kind) == "string" and detail_view.kinds[item.kind] then item.kind else nil
+				local value_text = if type(item.valueText) == "string" and item.valueText ~= "" then item.valueText else nil
+				if kind ~= nil and detail_view.values[kind] and value_text == nil then
+					kind = nil
+				end
+				table.insert(details, {
+					text = item.text,
+					account = if type(item.account) == "string" then item.account else nil,
+					window = if type(item.window) == "string" then item.window else nil,
+					kind = kind,
+					value = if kind ~= nil then value_text else nil,
+				})
+			end
+		end
+	end
+	return details
+end
+
 -- The cache as decoded JSON: model entries by chip name (`null` ones, two models sharing a chip name, are
 -- dropped by the decoder, which reads the same as missing) and the providers in the preset order (decoding
 -- loses the file's). `providers` is nil when the file has none, as written before it listed them.
@@ -577,7 +628,7 @@ local function parse_cache(doc: any): Cache?
 	if type(doc.models) == "table" then
 		for name, item in pairs(doc.models) do
 			if type(name) == "string" and type(item) == "table" and type(item.line) == "string" then
-				cache.models[name] = { line = item.line, resets = resets_of(item.resets) }
+				cache.models[name] = { line = item.line, resets = resets_of(item.resets), provider = if type(item.provider) == "string" then item.provider else nil, details = details_of(item.details) }
 			end
 		end
 	end
@@ -603,6 +654,7 @@ local function parse_cache(doc: any): Cache?
 					resets = resets_of(item.resets),
 					windows = windows,
 					accounts = if #accounts > 1 then accounts else {},
+					details = details_of(item.details),
 				})
 			end
 		end
@@ -1211,6 +1263,8 @@ local function color_key(id: string?, label: string): string
 end
 
 local function preset_for(id: string?, label: string): Palette
+	-- an external source's provider takes the colors of the provider it reports (`keeper:dashboard:openai-codex`)
+	id = if id then (string.match(id, "^[^:]+:[^:]+:(.+)$") or id) else nil
 	return PRESETS[color_key(id, label)] or PRESETS[LABEL_IDS[label] or ""] or ACCENT
 end
 
@@ -1254,11 +1308,50 @@ local function signature_of(groups: { Group }, others: { string }, title: string
 		for _, reset in group.resets or {} do
 			table.insert(parts, string.format("r%d*%d:%s", reset.at, reset.count, reset.window or ""))
 		end
+		for _, detail in group.details or {} do
+			table.insert(
+				parts,
+				"d:"
+					.. (detail.account or "")
+					.. ":"
+					.. (detail.window or "")
+					.. ":"
+					.. (detail.kind or "")
+					.. ":"
+					.. (detail.value or "")
+					.. ":"
+					.. detail.text
+			)
+		end
 	end
 	for _, other in others do
 		table.insert(parts, other)
 	end
 	return table.concat(parts, "\n")
+end
+
+-- Quantities follow account visibility, but never average unlike units or estimates.
+local function visible_details(settings: Settings, id: string?, accounts: { string }, details: { Detail }?): { Detail }
+	local visible: { Detail } = {}
+	local chosen = if id then chosen_account(settings, id, accounts) else nil
+	for _, detail in details or {} do
+		if detail.account and id and (account_off(settings, id, detail.account) or (chosen ~= nil and chosen ~= detail.account)) then
+			continue
+		end
+		if detail.window and id then
+			local hidden = settings.hidden[id] or {}
+			local _, bare = account_of(detail.window, accounts)
+			if table.find(hidden, string.lower(bare or detail.window)) or table.find(hidden, string.lower(detail.window)) then
+				continue
+			end
+		end
+		table.insert(visible, detail)
+	end
+	local mode = if id then settings.account[id] else nil
+	if #accounts > 1 and #visible > 0 and (mode == COMBINED or mode == COMBINED_PLANS) then
+		return { { text = "Quantities: choose one or All accounts" } }
+	end
+	return visible
 end
 
 -- What the line shows. By the mode: every provider in the cache, or the chosen ones; or (with neither) the
@@ -1273,16 +1366,18 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 	local source = "status"
 	local title: string? = nil
 	local providers = if cache then cache.providers else nil
+	local entry = if cache and dock.chip then cache.models[dock.chip :: string] else nil
 	local listed = false
 	if settings.mode ~= "current" and providers then
 		for _, provider in ordered(providers, settings.order) do
 			if settings.mode == "all" or table.find(settings.selected, provider.id) then
 				local provider_label, provider_windows = parse_line(provider.line)
-				listed = listed or #provider_windows > 0
+				listed = listed or #provider_windows > 0 or #(provider.details or {}) > 0
 				provider_windows = shown_windows(settings, provider.id, provider_windows)
 				local rest: { Window }? = nil
 				provider_windows, rest = account_view(settings, provider.id, provider.accounts, provider_windows)
-				if #provider_windows > 0 then
+				local details = visible_details(settings, provider.id, provider.accounts, provider.details)
+				if #provider_windows > 0 or #details > 0 then
 					table.insert(groups, {
 						key = provider.id,
 						id = provider.id,
@@ -1290,6 +1385,7 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 						windows = provider_windows,
 						resets = provider.resets,
 						rest = rest,
+						details = details,
 					})
 				end
 			end
@@ -1297,18 +1393,34 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 		source = settings.mode
 	end
 	if not listed then
-		local entry = if cache and dock.chip then cache.models[dock.chip :: string] else nil
 		if dock.viewing and entry then
 			label, windows = parse_line(entry.line)
 			source = "model:" .. (dock.chip :: string)
 		else
 			source = "status"
 		end
-		local id = if label then provider_id(label, cache) else nil
+		local id = if entry and entry.provider then entry.provider else if label then provider_id(label, cache) else nil
+		if label == nil and id and providers then
+			for _, provider in providers do
+				if provider.id == id then
+					label = provider.label
+					break
+				end
+			end
+		end
+		local accounts = accounts_of(cache, id)
 		windows = shown_windows(settings, id, windows)
 		local rest: { Window }? = nil
-		windows, rest = account_view(settings, id, accounts_of(cache, id), windows)
-		if #windows > 0 then
+		windows, rest = account_view(settings, id, accounts, windows)
+		local details = visible_details(settings, id, accounts, if entry then entry.details else nil)
+		if #details > 0 and #windows == 0 and entry then
+			local kept: { string } = {}
+			for _, other in others do
+				if other ~= entry.line then table.insert(kept, other) end
+			end
+			others = kept
+		end
+		if #windows > 0 or #details > 0 then
 			table.insert(groups, {
 				key = id or label or "usage",
 				id = id,
@@ -1316,11 +1428,10 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 				windows = windows,
 				resets = if entry then entry.resets else nil,
 				rest = rest,
+				details = details,
 			})
 			title = (label or "") .. (if label then " usage" else "Usage")
-			if source ~= "status" then
-				title ..= " · " .. (dock.chip :: string)
-			end
+			if source ~= "status" then title ..= " · " .. (dock.chip :: string) end
 		end
 	end
 	if title == nil then
@@ -1456,6 +1567,10 @@ local function line_of(model: Model, compact: boolean?): Line
 		end
 	end
 	for g, group in model.groups do
+		if #group.windows == 0 then
+			next_part()
+			add(unbroken(group.label .. " details"), group_color(g, "a"))
+		end
 		for w, window in group.windows do
 			local tone = tone_of(window.pct)
 			local account = if window.lead then window.account else nil
@@ -1843,6 +1958,10 @@ end
 -- that is too tall, the last of those rows fold into one, `+4 more accounts · lowest 7D 5%`. An account picked in
 -- the panel always shows its windows in full: it was picked to be seen. Only when it and the providers without
 -- accounts outgrow the limit on their own is the card taller (the panel says so).
+-- Under a window's meter, the estimates its details carry for that window (tokens and API-equivalent value
+-- left), each after its icon, as the writer formatted them; a plan its account names once rides on the
+-- account's heading (the title, for a provider alone on the card) as a pill. The native details view gets
+-- neither: it draws both itself.
 
 -- An account's windows on one row, each window's saved resets beside it as the line has them (`+NF` for Fable
 -- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`.
@@ -1859,14 +1978,56 @@ local function account_summary(prefix: string, windows: { Window }, provider: st
 	return text, lowest
 end
 
--- `fixed` builds the card as the panel measures it instead of fitting it to `limit`: "all", every account in full
--- and a row for every other; "least", every account summed up and every summary folded.
+-- `fixed` bypasses fitting: "all" measures the hover in full, "least" measures its folded summary, and
+-- "details" supplies every scoped fact to the scrollable native view.
 local function card(model: Model, hint: string, limit: number, fixed: string?): { Row }
 	local key = model.signature .. "\n" .. hint .. "\n" .. tostring(limit) .. "\n" .. tostring(fixed)
 	if key == card_for then
 		return card_rows
 	end
 	local now = now_ms()
+	-- The plan an account's details name, if they name exactly one (`account` nil: the provider's single account).
+	local function plan_of(details: { Detail }, account: string?): string?
+		local plan: string? = nil
+		for _, detail in details do
+			if detail.kind == "plan" and detail.value and detail.window == nil and detail.account == account then
+				if plan and plan ~= detail.value then return nil end
+				plan = detail.value
+			end
+		end
+		return plan
+	end
+	-- A window's estimates on one row, short (`633.04M`, `$533.10`): the icon names the unit, so `tokens` goes
+	-- and a USD amount takes `$`. Each icon covers three blank cells (the cost's `$` glyph in its middle one).
+	local function estimate_row(details: { Detail }, account: string?, window: string): Row?
+		local tokens: string?, cost: string? = nil, nil
+		for _, detail in details do
+			if detail.window == window and detail.account == account and detail.value then
+				if detail.kind == "tokens-estimate" and tokens == nil then
+					tokens = (string.gsub(detail.value :: string, " tokens$", ""))
+				elseif detail.kind == "cost-estimate" and cost == nil then
+					cost = (string.gsub(detail.value :: string, "^USD ", "$"))
+				end
+			end
+		end
+		if tokens == nil and cost == nil then
+			return nil
+		end
+		local text = ""
+		local icons: { { cell: number, kind: string } } = {}
+		if tokens then
+			table.insert(icons, { cell = 0, kind = "tokens" })
+			text = "    " .. (tokens :: string)
+		end
+		if cost then
+			if text ~= "" then
+				text ..= "   "
+			end
+			table.insert(icons, { cell = glyph_count(text), kind = "cost" })
+			text ..= " $  " .. (cost :: string)
+		end
+		return { text = text, color = "var(--oc-head)", icons = icons }
+	end
 	-- an account's (or provider's) rows in full, by group and run: the same in every build, so made once
 	local done: { [string]: { Row } } = {}
 	-- `full`: how many accounts, in the line's order, show their windows; of the rest, `keep` get a row each (the
@@ -1881,8 +2042,16 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 		for g, group in model.groups do
 			local accent = group_color(g, "a")
 			local first = group.windows[1]
+			local hover = fixed ~= "details"
 			if several and not (first and first.lead) then
-				table.insert(rows, { text = group.label, color = accent })
+				table.insert(rows, {
+					text = group.label,
+					color = accent,
+					heading = true,
+					badge = if hover then plan_of(group.details or {}, nil) else nil,
+				})
+			elseif hover and not several then
+				rows[1].badge = plan_of(group.details or {}, nil)
 			end
 			local resets = group.resets or {}
 			local function add_resets(into: { Row }, label: string): boolean
@@ -1902,17 +2071,48 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				end
 				return added
 			end
+			local details = group.details or {}
+			-- Full details keep every fact and its account/window boundary. The hover keeps status warnings
+			-- and one opaque detail when there is no meter; quantities and metadata live in the native view.
+			local function add_details(into: { Row }, account: string?, window: string?, first: boolean)
+				local noted = false
+				for _, detail in details do
+					if detail.window == window and (detail.account == account or (detail.account == nil and first)) then
+						local status = detail.kind == "stale" or detail.kind == "error"
+						local opaque = #group.windows == 0 and not noted and detail.kind ~= "plan" and detail.kind ~= "observed"
+						if fixed == "details" or status or opaque then
+							local shared = detail.account == nil and account ~= nil
+							table.insert(into, {
+								text = CARD_INDENT .. (if shared then "Provider · " else "") .. detail.text,
+								color = detail_view.color(detail.kind),
+								kind = detail.kind, value = detail.value,
+								account_note = window == nil, shared = shared,
+							})
+							noted = true
+						end
+					end
+				end
+			end
 			-- an account's row, or (past `keep`) its share of the provider's fold
 			local folded, lowest, lowest_text, fold_muted = 0, 101, "", false
 			local function one_row(name: string, windows: { Window }, color: string?, rule: boolean)
 				if kept < keep then
 					kept += 1
 					local text, low = account_summary((if several then group.label .. " " else "") .. name, windows, group.id)
+					if #windows == 0 then
+						for _, detail in details do
+							if detail.account == name then
+								text ..= " · " .. detail.text
+								break
+							end
+						end
+					end
 					local tone = tone_of(low)
 					table.insert(rows, {
 						text = text,
 						color = color or (if tone == "ok" then accent else "var(--oc-win-" .. tone .. ")"),
 						rule = rule,
+						heading = true,
 					})
 					return
 				end
@@ -1923,6 +2123,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
 					end
 				end
+				if #windows == 0 and lowest_text == "" then lowest_text = "details" end
 			end
 			-- the group's windows by account (one run, for a provider without accounts)
 			local runs: { { name: string?, windows: { Window } } } = {}
@@ -1931,6 +2132,17 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 					table.insert(runs, { name = window.account, windows = {} })
 				end
 				table.insert(runs[#runs].windows, window)
+			end
+			-- A source may report absolute amounts or an error without any percentage meter.
+			for _, detail in details do
+				local found = false
+				for _, run in runs do
+					if run.name == detail.account or detail.account == nil then
+						found = true
+						break
+					end
+				end
+				if not found then table.insert(runs, { name = detail.account, windows = {} }) end
 			end
 			for r, run in runs do
 				if run.name and group.rest == nil and shown >= full then
@@ -1945,11 +2157,14 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				if part == nil then
 					local new: { Row } = {}
 					if run.name then
+						local heading = (if several then group.label .. " " else "")
+							.. ((run.windows[1] and run.windows[1].plan) or run.name :: string)
 						table.insert(new, {
-							text = (if several then group.label .. " " else "")
-								.. (run.windows[1].plan or run.name :: string),
+							text = heading,
 							color = accent,
 							rule = r > 1,
+							heading = true,
+							badge = if hover then plan_of(details, run.name) else nil,
 						})
 					end
 					for _, window in run.windows do
@@ -1963,6 +2178,10 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 							a = a,
 							b = b,
 						})
+						local estimates = if hover then estimate_row(details, run.name, window.label) else nil
+						if estimates then
+							table.insert(new, estimates)
+						end
 						if window.covers then
 							table.insert(new, { text = CARD_INDENT .. (window.covers :: string), color = "var(--oc-mute)" })
 						end
@@ -1991,7 +2210,9 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 							end
 							table.insert(new, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
 						end
+						add_details(new, run.name, window.label, false)
 					end
+					add_details(new, run.name, nil, r == 1)
 					done[made] = new
 					part = new
 				end
@@ -2028,19 +2249,26 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 			end
 		end
 		for _, other in model.others do
-			table.insert(rows, { text = other, color = "var(--oc-soft)" })
+			table.insert(rows, { text = other, color = "var(--oc-soft)", account_note = true })
 		end
-		table.insert(rows, { text = hint, color = "var(--oc-hint)", rule = true })
+		if fixed ~= "details" then
+			table.insert(rows, { text = hint, color = "var(--oc-hint)", rule = true })
+		end
 		card_runs = runs_rows
 		return rows
 	end
 	-- the accounts that can show in full, and those that can only get a row (the ones beside a picked account)
 	local accounts, others = 0, 0
 	for _, group in model.groups do
+		local names: { [string]: boolean } = {}
 		for _, window in group.windows do
-			if window.account and window.lead and group.rest == nil then
-				accounts += 1
-			end
+			if window.account then names[window.account] = true end
+		end
+		for _, detail in group.details or {} do
+			if detail.account then names[detail.account] = true end
+		end
+		if group.rest == nil then
+			for _ in names do accounts += 1 end
 		end
 		for i, window in (group.rest or {}) :: { Window } do
 			if window.lead or i == 1 then
@@ -2050,7 +2278,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 	end
 	local every = accounts + others
 	if fixed then
-		card_for, card_rows = key, if fixed == "all" then build(accounts, every) else build(0, 0)
+		card_for, card_rows = key, if fixed == "least" then build(0, 0) else build(accounts, every)
 		return card_rows
 	end
 	-- every account in full, unless that outgrows the limit: then as many as fit, the first accounts first; with
@@ -2142,17 +2370,25 @@ local CARD_KEYFRAMES = [==[
 -- The card's sheet for its rows. By default it is the hover target's `::after` over the line, rising into place
 -- after a beat; `target` (the settings panel's preview) draws the same card, still, on another element.
 local function card_css(rows: { Row }, target: string?): string
-	local width = CARD_MIN
+	-- the card's 11px mono glyphs are 6.6px wide; the estimate icons' colors (tokens, API-equivalent value) and
+	-- the plan pill's gold
+	local GLYPH_W = 6.6
+	local TOKENS_ICON, COST_ICON = "light-dark(#4f5bd5, #8b95ff)", "var(--ok)"
+	local PLAN_A, PLAN_B = "light-dark(#b7791f, #f6c453)", "light-dark(#975a16, #d69e2e)"
+	local width = 28
 	for _, row in rows do
 		local n = glyph_count(row.text)
 		if row.right then
 			n += 4 + glyph_count(row.right :: string)
 		end
+		if row.badge then
+			n += 4 + glyph_count(row.badge :: string)
+		end
 		width = math.max(width, n)
 	end
 	local lines: { string } = {}
 	local paint: { string } = {}
-	-- [1] is the text's paint, set below; then a tip, fill and track per window, then the title bar
+	-- Tern draws one text-clipped layer. The remaining layers are the compact meters, pills, icons and title band.
 	local images: { string } = { "" }
 	local positions: { string } = { "0 0" }
 	local sizes: { string } = { "100% 100%" }
@@ -2173,14 +2409,25 @@ local function card_css(rows: { Row }, target: string?): string
 		if row.right then
 			local right = row.right :: string
 			text ..= string.rep(" ", width - glyph_count(row.text) - glyph_count(right)) .. right
+		end
+		if row.badge then
+			local badge = row.badge :: string
+			text ..= string.rep(" ", width - glyph_count(row.text) - glyph_count(badge) - 1) .. badge .. " "
+		end
+		if row.right then
 			local a = row.a or "var(--accent)"
 			local b = row.b or a
 			local share = row.share or 0
-			local meter = y + CARD_ROW - 1 -- under the row's descenders, above the next row's glyphs
+			local meter = y + CARD_ROW - 1
 			-- a background-position percentage places the layer's own share of the slack: this centers the tip on it
 			layer(
 				tip_image(b, 70),
-				string.format("calc(%s%% + %spx) %spx", num(share * 100), num(share * TIP_W - TIP_W / 2), num(meter - 2)),
+				string.format(
+					"calc(%s%% + %spx) %spx",
+					num(share * 100),
+					num(share * TIP_W - TIP_W / 2),
+					num(meter - 2)
+				),
 				string.format("%spx %spx", num(TIP_W), num(TIP_H)),
 				string.format("%spx %spx", num(TIP_W), num(TIP_H)),
 				"content-box"
@@ -2207,6 +2454,60 @@ local function card_css(rows: { Row }, target: string?): string
 				"100% 1px",
 				"100% 1px",
 				"content-box"
+			)
+		end
+		-- the plan pill: the badge's text and a cell either side, ringed in gold with a glow, measured from the
+		-- right edge where the text's last cell ends (`calc(100% - Npx)` puts a layer's right edge N px in)
+		if row.badge then
+			local w = (glyph_count(row.badge :: string) + 2) * GLYPH_W
+			local r = 7
+			local top = y + 2
+			local function at(right: number, down: number): string
+				return string.format("calc(100%% %s %spx) %spx", if right < 0 then "+" else "-", num(math.abs(right)), num(top + down))
+			end
+			local edge = string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 80), faded(PLAN_B, 80))
+			local rim = string.format("%spx 1px", num(w - 2 * r))
+			layer(edge, at(r, 0), rim, rim, "content-box")
+			layer(edge, at(r, 2 * r - 1), rim, rim, "content-box")
+			for _, cap in { { color = PLAN_A, side = "100%", right = w - r }, { color = PLAN_B, side = "0%", right = 0 } } do
+				local half = string.format("%spx %spx", num(r), num(2 * r))
+				layer(
+					string.format(
+						"radial-gradient(%spx %spx at %s 50%%, %s 0%%, %s 76%%, %s 84%%, %s 94%%, %s 100%%)",
+						num(r), num(r), cap.side,
+						faded(cap.color, 30), faded(cap.color, 30), faded(cap.color, 80), faded(cap.color, 80), faded(cap.color, 0)
+					),
+					at(cap.right, 0), half, half, "content-box"
+				)
+			end
+			local body = string.format("%spx %spx", num(w - 2 * r), num(2 * r))
+			layer(string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 30), faded(PLAN_B, 30)), at(r, 0), body, body, "content-box")
+			local glow = string.format("%spx %spx", num(w + 16), num(2 * r + 14))
+			layer(string.format("radial-gradient(closest-side, %s, %s)", faded(PLAN_A, 22), faded(PLAN_A, 0)), at(-8, -7), glow, glow, "content-box")
+		end
+		-- an estimate's icon: a tinted disc ringed in its color over the icon's middle cell; the tokens icon
+		-- draws its lines in the text's color (the cost icon's `$` is a glyph of the row)
+		for _, icon in row.icons or {} do
+			local color = if icon.kind == "tokens" then TOKENS_ICON else COST_ICON
+			local cx = (icon.cell + 1.5) * GLYPH_W
+			local cy = y + CARD_ROW / 2
+			if icon.kind == "tokens" then
+				for k, length in { 5, 5, 3 } do
+					local size = string.format("%spx 1px", num(length))
+					layer(
+						string.format("linear-gradient(%s, %s)", solid("var(--oc-head)"), solid("var(--oc-head)")),
+						string.format("%spx %spx", num(cx - 2.5), num(cy + (k - 2) * 2.5 - 0.5)),
+						size, size, "content-box"
+					)
+				end
+			end
+			layer(
+				string.format(
+					"radial-gradient(closest-side, %s 0%%, %s 72%%, %s 80%%, %s 92%%, %s 100%%)",
+					faded(color, 22), faded(color, 22), solid(color), solid(color), faded(color, 0)
+				),
+				string.format("%spx %spx", num(cx - 6.5), num(cy - 6.5)),
+				"13px 13px", "13px 13px", "content-box"
 			)
 		end
 		table.insert(lines, string.sub(css_string(text), 2, -2))
@@ -2411,14 +2712,16 @@ local function install(css: string)
 	end
 end
 
--- The settings panel's action (the `panel` command) and its default shortcut.
+-- The settings panel's action (the `panel` command) and its default shortcut; the quota details' action.
 local PANEL_ACTION = "plugin." .. tern.plugin.id .. ".panel"
 local PANEL_KEYS = "ctrl+alt+u"
+local DETAILS_ACTION = "plugin." .. tern.plugin.id .. ".details"
 -- The panel's pane while it is open, and what redraws it (see the panel section); the dock last read, which
 -- the panel's preview of the line is drawn from.
 local panel_pane: number? = nil
 local sync_panel: (cx: WindowCx, force: boolean, settings: Settings?, cache: Cache?) -> ()
 local flush_panel: (cx: WindowCx) -> ()
+local sync_details: (cx: WindowCx, open: boolean, settings: Settings?, cache: Cache?) -> ()
 local last_dock: Dock? = nil
 
 -- A chord as the keymap spells it (`ctrl+alt+u`) for people (`Ctrl+Alt+U`); a sequence's steps are spaced.
@@ -2434,13 +2737,15 @@ local function chord_label(chord: string): string
 	return table.concat(steps, " ")
 end
 
--- The panel's shortcut as the keymap has it now (the user may rebind or unbind it): the shortest chord bound
--- to the panel, read at most every 30s (every 2s while there is none: the keymap takes the plugin's binds a
--- moment after a reload). `cx.actions:describe` doesn't know plugin commands, so it comes from the chords.
+-- The panel's and the details' shortcuts as the keymap has them now (the user may rebind or unbind them): the
+-- shortest chord bound to each, read at most every 30s (every 2s while the panel has none: the keymap takes the
+-- plugin's binds a moment after a reload). `cx.actions:describe` doesn't know plugin commands, so they come from
+-- the chords. `shortcut` returns the panel's; the same read leaves the details' in `details_keys`.
 local SHORTCUT_TTL_MS = 30000
 local SHORTCUT_RETRY_MS = 2000
 local shortcut_text: string? = nil
 local shortcut_read_at: number? = nil
+local details_keys: string? = nil
 
 local function shortcut(cx: WindowCx): string?
 	local now = tern.now()
@@ -2450,24 +2755,35 @@ local function shortcut(cx: WindowCx): string?
 		local ok, keymap = pcall(function(): any
 			return cx.actions:keys()
 		end)
-		local best: string? = nil
+		local best: { [string]: string } = {}
 		if ok and type(keymap) == "table" then
 			for chord, actions in keymap do
-				if type(chord) == "string" and type(actions) == "table" and table.find(actions, PANEL_ACTION) then
-					if best == nil or #chord < #(best :: string) or (#chord == #(best :: string) and chord < (best :: string)) then
-						best = chord
+				if type(chord) == "string" and type(actions) == "table" then
+					for _, action in { PANEL_ACTION, DETAILS_ACTION } do
+						local had = best[action]
+						if table.find(actions, action) and (had == nil or #chord < #had or (#chord == #had and chord < had)) then
+							best[action] = chord
+						end
 					end
 				end
 			end
 		end
-		shortcut_text = if best then chord_label(best :: string) else nil
+		shortcut_text = if best[PANEL_ACTION] then chord_label(best[PANEL_ACTION]) else nil
+		details_keys = if best[DETAILS_ACTION] then chord_label(best[DETAILS_ACTION]) else nil
 	end
 	return shortcut_text
 end
 
--- The card's last row: how to open the settings.
+-- The card's last row: how to open the details and the settings (the line itself takes no clicks).
 local function settings_hint(keys: string?): string
-	return "settings · " .. (keys or "omp Usage in the palette")
+	local parts: { string } = {}
+	if details_keys then
+		table.insert(parts, "details " .. details_keys)
+	end
+	if keys then
+		table.insert(parts, "settings " .. keys)
+	end
+	return if #parts > 0 then table.concat(parts, " · ") else "details & settings · omp Usage in the palette"
 end
 
 local refresh: (cx: WindowCx) -> ()
@@ -2574,7 +2890,7 @@ refresh = function(cx: WindowCx)
 		local info = cx.session:pane(pane)
 		if info and info.kind == "agent" then
 			target = pane
-		elseif info and pane == panel_pane then
+		elseif info and (pane == panel_pane or pane == detail_view.pane) then
 			target = shown_pane or some_agent(cx, info.tab)
 			local beside = agents_in(cx, info.tab)
 			if #beside == 1 and beside[1] == target then
@@ -2586,7 +2902,7 @@ refresh = function(cx: WindowCx)
 		target = shown_pane -- redraw the last line in its usual place, the focused pane
 	end
 	line_pane = scope
-	if target == nil and panel_pane == nil then
+	if target == nil and panel_pane == nil and detail_view.pane == nil then
 		return
 	end
 	local settings = load_settings()
@@ -2599,6 +2915,9 @@ refresh = function(cx: WindowCx)
 	-- spent much of its timer's 50ms: the panel's redraw waits for the next poll.
 	if panel_pane ~= nil and cache_raw == raw then
 		sync_panel(cx, false, settings, cache)
+	end
+	if detail_view.pane ~= nil and cache_raw == raw then
+		sync_details(cx, false, settings, cache)
 	end
 end
 
@@ -2616,9 +2935,10 @@ end)
 -- the first poll waits out the reload's own work
 tern.timer(300, tick)
 
--- Settings, two ways: the panel (a canvas beside the focused pane: the `omp Usage: Settings panel` command,
--- Ctrl+Alt+U, or `usage` in the status bar) and pickers (`omp Usage: Settings…`). Both store what is chosen in
--- `tern.kv` and redraw the line at once; the menus and the panel are built by the plain functions below.
+-- Settings, two ways: the panel (a canvas beside the focused pane: `omp Usage: Settings panel`,
+-- Ctrl+Alt+U) and pickers (`omp Usage: Settings…`). Native quota details open from `usage` (Plugin segments),
+-- Ctrl+Alt+Shift+U or `omp Usage: Quota details`.
+-- Both settings views store choices in `tern.kv` and redraw the line at once.
 
 -- The providers on offer, in the user's order.
 local function providers_in_order(settings: Settings): { Provider }
@@ -4709,6 +5029,7 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		colors_key(settings),
 		hidden_key(settings),
 		keys or "",
+		details_keys or "",
 		tostring(settings.card_rows),
 		update.interval().id,
 		(function(): string
@@ -4731,6 +5052,19 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 	table.insert(parts, if moving then moving.kind .. ":" .. moving.id .. ":" .. (moving.name or "") else "")
 	table.insert(parts, preview.signature)
 	return { settings = settings, providers = providers, preview = preview, cache = cache, keys = keys, sig = table.concat(parts, "\n") }
+end
+-- The details canvas follows the same selected sources and last agent as the preview. Its scrollable body
+-- is not subject to the hover's row budget.
+sync_details = function(cx: WindowCx, open: boolean, settings: Settings?, cache: Cache?)
+	local current = settings or load_settings()
+	local source = if settings then cache else read_cache(now_ms())
+	local model = build_model(current, last_dock or NO_DOCK, source)
+	local signature = model.signature .. "\n" .. colors_key(current)
+	if not open and signature == detail_view.signature then return end
+	detail_view.show(
+		cx, card(model, "", current.card_rows, "details"),
+		palette_css(model, current, detail_view.selector), signature, open
+	)
 end
 
 -- The panel's view, its bottom bar and its sheet.
@@ -4879,6 +5213,11 @@ local function open_panel(cx: WindowCx)
 end
 
 tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
+	if ev.title == detail_view.title and ev.act == "settings" then
+		detail_view.close(cx, ev.pane)
+		open_panel(cx)
+		return true
+	end
 	if ev.title ~= nil and ev.title ~= PANEL_TITLE then
 		return false
 	end
@@ -4989,6 +5328,8 @@ tern.timer(600, function(cx: WindowCx?)
 		if panel_pane then
 			sync_panel(cx, true)
 		end
+		detail_view.restore(cx)
+		if detail_view.pane then sync_details(cx, false) end
 	end
 end)
 
@@ -5057,6 +5398,17 @@ local function open_menu(cx: WindowCx)
 end
 
 tern.command({
+	id = "details",
+	title = "omp Usage: Quota details",
+	icon = "gauge",
+	keys = { "ctrl+alt+shift+u" },
+	run = function(cx: WindowCx)
+		refresh(cx)
+		sync_details(cx, true)
+	end,
+})
+
+tern.command({
 	id = "panel",
 	title = "omp Usage: Settings panel",
 	icon = "sliders",
@@ -5080,9 +5432,9 @@ tern.command({
 	end,
 })
 
--- `usage` in the status bar, on an agent pane: a click opens the panel. On every pane, while an update is waiting,
--- Update omp Usage (update.luau) first.
-local STATUS: { StatusSegment } = { { text = "usage", icon = "gauge", command = PANEL_ACTION } }
+-- `usage` in the widget bar's Plugin segments opens the read-only native details.
+-- While an update is waiting, Update omp Usage (update.luau) stays first.
+local STATUS: { StatusSegment } = { { text = "usage", icon = "gauge", command = DETAILS_ACTION } }
 
 tern.chrome.status(function(pane: StatusPaneInfo): { StatusSegment }?
 	local pending = update.status_segment()
