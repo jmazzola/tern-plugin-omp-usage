@@ -18,11 +18,10 @@
 // Footer wiring: put "status" in statusLine.leftSegments/rightSegments (that
 // segment renders ctx.ui.setStatus values).
 //
-// Source of truth is `omp usage --json` (same reports the `usage` segment and
-// `omp usage` use), polled every 60s and after each turn. omp has no extension
-// event for a model switch, so the active model is checked every second; a
-// change redraws at once from the last reports (they cover every provider),
-// then fetches fresh ones.
+// Native reports come from `omp usage --json`, polled every 60s and after each
+// turn. Configured CPA/Keeper sources have their own polling intervals and keep
+// the actual quota observation time. Model switches redraw immediately from
+// the last reports, then request an update; source intervals still apply.
 //
 // After each fetch, every available model's line and saved-reset expiries are
 // also written to LINES_FILE, keyed by the name omp's model chip shows. The
@@ -34,6 +33,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadUsageSources } from "./usage-sources/index.js";
+import { cleanText, limitDetails, reportNotes } from "./usage-sources/details.js";
 
 const STATUS_KEY = "usage-remaining";
 const INTERVAL_MS = 60_000;
@@ -56,11 +57,13 @@ const SELF_FILE = (() => {
     return undefined;
   }
 })();
+const SOURCE_FILES = ["common.js", "cpa.js", "keeper.js", "details.js", "reset-credits.js", "index.js"]
+  .map((name) => fileURLToPath(new URL(`./usage-sources/${name}`, import.meta.url)));
 const SELF_SOURCE = readSelf();
 
 function readSelf() {
   try {
-    return SELF_FILE ? readFileSync(SELF_FILE, "utf8") : undefined;
+    return SELF_FILE ? [SELF_FILE, ...SOURCE_FILES].map((file) => readFileSync(file, "utf8")).join("\n") : undefined;
   } catch {
     return undefined;
   }
@@ -186,6 +189,7 @@ const PROVIDER_LABELS = {
   "alibaba-token-plan": "Qwen",
   synthetic: "Synthetic",
   devin: "Devin",
+  xai: "Grok",
 };
 
 // Words in provider ids that name the product or plan, not the provider.
@@ -194,6 +198,8 @@ const GENERIC_ID_WORDS = new Set(["api", "cli", "code", "coding", "plan", "subsc
 // A provider's label: its listed one, else the first word of its id that names
 // it, capitalized (`muse-code` reads `Muse`, `zai-coding-plan` `Zai`).
 function shortProvider(provider) {
+  const source = /^(cpa|keeper):([^:]+):(.+)$/.exec(provider);
+  if (source) return `${source[3] === "status" ? source[1].toUpperCase() : shortProvider(source[3])}@${source[2]}`;
   const known = PROVIDER_LABELS[provider];
   if (known) return known;
   const word = provider.split(/[^a-z0-9]+/i).find((w) => w && !GENERIC_ID_WORDS.has(w.toLowerCase()));
@@ -202,11 +208,12 @@ function shortProvider(provider) {
 
 // The bare ids of each provider's available models (ctx.models.list()), by
 // provider; null when the list isn't known.
-function modelIndex(models) {
+function modelIndex(models, sources, reports) {
   if (!Array.isArray(models)) return null;
   const index = new Map();
   for (const m of models) {
-    const { provider, bare } = identity(m);
+    const { provider: original, bare } = identity(m);
+    const provider = sources ? sources.resolve(original, bare, reports ?? []) : original;
     if (!provider || !bare) continue;
     if (!index.has(provider)) index.set(provider, []);
     index.get(provider).push(bare);
@@ -242,6 +249,8 @@ function scopeOf(limit, bares) {
   const modelId = scopeText(scope.modelId);
   const tier = scopeText(scope.tier);
   if (modelId) return { kind: "model", name: tier || modelId, modelId, tier };
+  const display = scopeText(limit?.displayLabel);
+  if (display) return { kind: modelId ? "model" : "meter", name: display, modelId, tier };
   if (limit?.id === "anthropic:7d:fable") return { kind: "meter", name: "fable", modelId, tier };
   if (!tier || scope.shared === true || (bares && !bares.some((b) => inScope("", tier, b)))) {
     return { kind: "plan", name: "", modelId, tier };
@@ -274,7 +283,7 @@ function appliesTo(bare, bares) {
 const FABLE_METERS = ["anthropic:7d:fable", "anthropic:reset:seven_day_overage_included"];
 
 function creditApplies(c, report, limit, general) {
-  if (report.provider === "anthropic" && limit.id === "anthropic:7d:fable") {
+  if ((report.metadata?.baseProvider ?? report.provider) === "anthropic" && limit.id === "anthropic:7d:fable") {
     const clears = Array.isArray(c?.clears) ? c.clears : [];
     return clears.some((id) => FABLE_METERS.includes(id)) && !clears.includes("anthropic:7d")
       && c.remainingCount > 0 && (c.status === "available" || c.status === "unavailable");
@@ -336,6 +345,7 @@ function savedResets(report, applies, bares, account) {
 // keyed apart from the general window of the same length. `account` (set when
 // the provider has several accounts) leads every label: `alice 5h`.
 function renderRemaining(report, applies, bares, account) {
+  if (report.stale) return "";
   const now = Date.now();
   const seen = new Map();
   for (const limit of report.limits) {
@@ -380,7 +390,7 @@ function renderRemaining(report, applies, bares, account) {
 // account, so a provider with several accounts has several.
 function providerReports(reports, provider) {
   return reports.filter(
-    (r) => r && Array.isArray(r.limits) && r.limits.length > 0 && String(r.provider).toLowerCase() === provider,
+    (r) => r && Array.isArray(r.limits) && (r.limits.length > 0 || r.metadata?.sourceId) && String(r.provider).toLowerCase() === provider,
   );
 }
 
@@ -396,6 +406,10 @@ function accountLabels(reports) {
   const accounts = reports.map((report, i) => {
     const email = report?.metadata?.email;
     const id = report?.metadata?.accountId;
+    const label = report?.metadata?.label;
+    if (typeof label === "string" && label.trim() && !(typeof email === "string" && email.includes("@"))) {
+      return { name: cleanText(label).replace(/\s+/g, "-"), domain: "" };
+    }
     if (typeof email === "string" && email.includes("@")) {
       const at = email.lastIndexOf("@");
       return { name: email.slice(0, at), domain: email.slice(at + 1).toLowerCase() };
@@ -409,9 +423,10 @@ function accountLabels(reports) {
   return long.map((name, i) => (alone(long, i) ? name : `${name}#${i + 1}`).replace(/\s+/g, "-"));
 }
 
-// A report's windows for model `bare`: with no model, those that count toward
-// every model, else (a provider whose limits are all model-scoped) all of them.
+// For the current model, retain its scopes. External provider overviews include
+// all scopes; native overviews prefer shared windows when those are available.
 function appliesFor(report, bare, bares) {
+  if (!bare && report.metadata?.sourceId) return () => true;
   const applies = appliesTo(bare, bares);
   if (bare || (report.limits ?? []).some((l) => applies(l) && windowOf(l))) return applies;
   return () => true;
@@ -440,13 +455,71 @@ function lineFor(reports, provider, bare, index) {
   const parts = accounts
     .map((a) => renderRemaining(a.report, a.applies, a.bares, a.account))
     .filter(Boolean);
-  return parts.length ? `${shortProvider(accounts[0].report.provider)} ${parts.join(" · ")}` : "";
+  if (parts.length) return `${shortProvider(accounts[0].report.provider)} ${parts.join(" · ")}`;
+  return accounts.some((a) => a.report.metadata?.sourceId) ? `${shortProvider(provider)} quota details` : "";
+}
+
+// Extra facts use the same account/window labels as the status, but never its percent grammar.
+// Every row stays { text, account?, window?, kind?, valueText? }: a single-line
+// row keeps its quantity/status semantics, while a row that has to wrap is
+// split into plain text so a partly wrapped value is never drawn as one.
+function detailsFor(reports, provider, bare, index) {
+  const details = [];
+  const add = (detail, account, window) => {
+    const words = cleanText(detail.text).match(/\S{1,67}/gu) ?? [];
+    const lines = [];
+    let line = "";
+    for (const word of words) {
+      if (line && line.length + word.length > 67) {
+        lines.push(line);
+        line = "";
+      }
+      line += (line ? " " : "") + word;
+    }
+    if (line) lines.push(line);
+    const scope = { ...(account ? { account } : {}), ...(window ? { window } : {}) };
+    if (lines.length > 1) {
+      for (const text of lines) details.push({ text, ...scope });
+      return;
+    }
+    const [text] = lines;
+    if (text === undefined) return;
+    details.push({
+      text,
+      ...(typeof detail.kind === "string" ? { kind: detail.kind } : {}),
+      ...(typeof detail.valueText === "string" ? { valueText: detail.valueText } : {}),
+      ...scope,
+    });
+  };
+  for (const { report, bares, account, applies } of accountsFor(reports, provider, bare, index)) {
+    if (report.metadata?.sourceId) for (const note of reportNotes(report)) add(note, account);
+    for (const limit of report.limits) {
+      if (!applies(limit)) continue;
+      if (!report.metadata?.sourceId && (!limit.amount?.unit || ["percent", "unknown"].includes(limit.amount.unit)) && !limit.usage) continue;
+      const w = windowOf(limit);
+      const scope = scopeOf(limit, bares).name.replace(/\s+/g, "-");
+      const scoped = w ? (scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label) : undefined;
+      const window = scoped ? (account ? `${account} ${scoped}` : scoped) : undefined;
+      const metered = !report.stale && w && (typeof limit.amount?.remainingFraction === "number" || typeof limit.amount?.usedFraction === "number");
+      for (const detail of limitDetails(limit, { estimates: !report.stale, includeShare: !metered })) {
+        // A quantity with no drawable window keeps its scope as plain text.
+        if (metered) add(detail, account, window);
+        else add({ text: `${scoped || cleanText(limit.displayLabel || limit.id)}: ${detail.text}` }, account);
+      }
+      if (!metered && Number.isFinite(limit.window?.resetsAt)) {
+        const reset = new Date(limit.window.resetsAt);
+        if (Number.isFinite(reset.getTime())) add({ text: `${scoped || cleanText(limit.displayLabel || limit.id)} resets ${reset.toISOString().slice(0, 16).replace("T", " ")} UTC` }, account);
+      }
+    }
+  }
+  return details;
 }
 
 // The saved resets of every account of `provider`, soonest expiry first.
 function resetsFor(reports, provider, bare, index) {
   if (!isTrackedProvider(provider)) return [];
   return accountsFor(reports, provider, bare, index)
+    .filter((a) => !a.report.stale)
     .flatMap((a) => savedResets(a.report, a.applies, a.bares, a.account))
     .sort((a, b) => a.expiresAt - b.expiresAt);
 }
@@ -454,15 +527,16 @@ function resetsFor(reports, provider, bare, index) {
 // Draws the status for the active model from the last fetched reports. With
 // none yet, a tracked model keeps the current status until the fetch lands.
 function render(state, ctx) {
-  const { provider, bare } = activeModel(ctx);
-  state.shownModel = `${provider}/${bare}`;
+  const { provider: original, bare } = activeModel(ctx);
+  state.shownModel = `${original}/${bare}`;
+  const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
+  const provider = state.sources ? state.sources.resolve(original, bare, reports ?? []) : original;
   if (!isTrackedProvider(provider)) {
     ctx.ui.setStatus(STATUS_KEY, undefined);
     return;
   }
-  const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
   if (!reports) return;
-  ctx.ui.setStatus(STATUS_KEY, lineFor(reports, provider, bare, modelIndex(state.models)) || undefined);
+  ctx.ui.setStatus(STATUS_KEY, lineFor(reports, provider, bare, modelIndex(state.models, state.sources, reports)) || undefined);
 }
 
 // Writes LINES_FILE:
@@ -477,19 +551,27 @@ function render(state, ctx) {
 //   also lists them, as its line names them and in omp's order: `accounts`
 //   ["alice", "bob"], which the plugin needs to tell an account (`alice 7d`)
 //   from a tier (`Fable 7d`) and to let the user order and pick accounts.
+// Details rows are `{ text, account?, window?, kind?, valueText? }`: `text` is
+// always readable, and `kind` (`tokens-used`, `cost-used`, `tokens-estimate`,
+// `cost-estimate`, `plan`, `observed`, `stale`, `error`) with its
+// already-formatted `valueText` lets the plugin draw a quantity or status
+// without parsing prose.
 async function writeLines(state) {
   const reports = state.data && Array.isArray(state.data.reports) ? state.data.reports : null;
   const models = state.models;
   if (!reports || !Array.isArray(models)) return;
-  const index = modelIndex(models);
+  const index = modelIndex(models, state.sources, reports);
   const entries = {};
   for (const m of models) {
     const name = chipName(m);
     if (!name) continue;
-    const { provider, bare } = identity(m);
+    const { provider: original, bare } = identity(m);
+    const provider = state.sources ? state.sources.resolve(original, bare, reports) : original;
     const entry = {
       line: lineFor(reports, provider, bare, index),
       resets: resetsFor(reports, provider, bare, index),
+      provider,
+      details: detailsFor(reports, provider, bare, index),
     };
     const same = name in entries && JSON.stringify(entries[name]) === JSON.stringify(entry);
     entries[name] = !(name in entries) || same ? entry : null;
@@ -504,6 +586,8 @@ async function writeLines(state) {
       label: shortProvider(provider),
       line,
       resets: resetsFor(reports, provider, "", index),
+      details: detailsFor(reports, provider, "", index),
+      baseProvider: r.metadata?.baseProvider ?? provider,
     };
     const accounts = accountsFor(reports, provider, "", index).map((a) => a.account);
     if (accounts.length > 1) entry.accounts = accounts;
@@ -516,7 +600,7 @@ async function writeLines(state) {
   if (SELF_SOURCE !== undefined && readSelf() !== SELF_SOURCE) return;
   mkdirSync(dirname(LINES_FILE), { recursive: true });
   const tmp = `${LINES_FILE}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ generatedAt: now, models: entries, providers }));
+  writeFileSync(tmp, JSON.stringify({ generatedAt: now, models: entries, providers }), { mode: 0o600 });
   renameSync(tmp, LINES_FILE);
   state.writtenLines = body;
   state.writtenAt = now;
@@ -525,9 +609,10 @@ async function writeLines(state) {
 async function update(state, ctx) {
   try {
     // Fetched whatever the main model is: a viewed subagent can use another provider.
-    const data = await fetchUsageJson();
-    // A failed fetch keeps the last good reports; the next poll retries.
-    if (data && Array.isArray(data.reports)) state.data = data;
+    const [data, external] = await Promise.all([fetchUsageJson(), state.sources?.poll() ?? []]);
+    // A failed native fetch keeps its last reports without advancing any source observation clock.
+    if (data && Array.isArray(data.reports)) state.nativeReports = data.reports;
+    state.data = { reports: [...state.nativeReports, ...external] };
     const models = await ctx.models?.list?.();
     if (Array.isArray(models)) state.models = models;
     render(state, ctx);
@@ -551,8 +636,14 @@ function checkModel(state, ctx) {
 export default function usageRemaining(pi) {
   // Per session: the last `omp usage --json` reports and available models, the
   // model last drawn and the lines last written to LINES_FILE, and when.
-  const state = { data: null, models: null, shownModel: undefined, writtenLines: undefined, writtenAt: 0 };
+  const state = { data: null, nativeReports: [], models: null, sources: null, sourceError: null, shownModel: undefined, writtenLines: undefined, writtenAt: 0 };
+  try {
+    state.sources = loadUsageSources();
+  } catch (error) {
+    state.sourceError = error instanceof Error ? error.message : "Cannot load usage sources";
+  }
   pi.on("session_start", async (_event, ctx) => {
+    if (state.sourceError) ctx.ui.notify?.(state.sourceError, "warning");
     await update(state, ctx);
     ctx.setInterval(() => {
       void update(state, ctx);

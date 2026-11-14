@@ -552,6 +552,8 @@ end
 -- resets are Fable resets, marked `+NF` on the line.
 local function is_fable(provider: string?, label: string): boolean
 	local key = string.lower(label)
+	-- an external source's provider keeps its own id after the source's (`keeper:dashboard:anthropic`)
+	provider = if provider then (string.match(provider, "^[^:]+:[^:]+:(.+)$") or provider) else nil
 	return provider == "anthropic" and (key == "fable 7d" or string.sub(key, -9) == " fable 7d")
 end
 
@@ -1211,6 +1213,8 @@ local function color_key(id: string?, label: string): string
 end
 
 local function preset_for(id: string?, label: string): Palette
+	-- an external source's provider takes the colors of the provider it reports (`keeper:dashboard:openai-codex`)
+	id = if id then (string.match(id, "^[^:]+:[^:]+:(.+)$") or id) else nil
 	return PRESETS[color_key(id, label)] or PRESETS[LABEL_IDS[label] or ""] or ACCENT
 end
 

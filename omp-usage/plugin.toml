@@ -1,8 +1,8 @@
 schema = 1
 id = "omp-usage"
 name = "omp Usage"
-version = "0.4.4"
-description = "omp's usage-remaining status, above the omp composer's context hairline."
+version = "0.5.0"
+description = "omp's usage-remaining status and CLIProxyAPI/Keeper quotas, above the omp composer's context hairline."
 icon = "gauge"
 window = "window.luau"
 styles = ["bar.css"]
