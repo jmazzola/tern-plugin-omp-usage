@@ -13,8 +13,8 @@
   (`<img src="…" alt="…" width="…">`), so a 2× picture reads at its real size.
 - **History:** squash a feature's local commits into one before pushing. Never rewrite commits already on GitHub:
   the plugin's updater only fast-forwards, so a rewrite strands everyone who already pulled.
-- **Commit messages are release notes.** The update card shows users every commit that changes the plugin's folder
-  or the omp extension, in full: the subject as a heading, the body as Markdown (hard wraps joined, lists and
+- **Commit messages are release notes.** The update card shows users every commit that changes the plugin (anything
+  but the README, `docs/` and `.omp/`), in full: the subject as a heading, the body as Markdown (hard wraps joined, lists and
   `code` kept). Write them for the person deciding whether to update:
   - **Subject:** what changes for them, in plain words, imperative, ≤72 characters, e.g. "Show every Fable reset
     again". A version bump leads it: `0.3.2: …`. No file, function or field names, no internal ids.
