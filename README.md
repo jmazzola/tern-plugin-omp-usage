@@ -91,7 +91,7 @@ An installed copy doesn't write its extension while `config.yml` already loads o
 > [!WARNING]
 > **The `omp-usage` folder is deprecated.** Since 0.5.0 the plugin is the repo itself. Clones linked to
 > `…/tern-plugin-omp-usage/omp-usage` (the old install) link the repo folder by themselves when they update to 0.5.0,
-> with a toast saying so; if the toast says it couldn't, run `tern plugin link .` in the repo folder. The folder
+> with a toast saying so; if a toast says it couldn't, run `tern plugin link .` in the repo folder. The folder
 > goes away in a later release, after which a clone still linked to it stops loading. `tern plugin list` shows which
 > folder yours uses.
 
@@ -193,7 +193,8 @@ Open settings panels step aside while the update lands, so nothing flashes half-
   `git pull`, then `tern plugin reload`.
 - Clones linked to the deprecated `omp-usage` folder link the repo folder when they update: see [From a clone](#from-a-clone).
 - Updates need git on `PATH`, installed copies too.
-- An installed copy updates from the repo its `upstream` file names; a fork puts its own URL there.
+- An installed copy updates from the repo its `upstream` file names, read at each check; a fork puts its own URL
+  there. Updates leave that file as you set it.
 
 ## Turn it off
 
@@ -214,7 +215,8 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 | Ctrl+Alt+U does nothing | Another binding took it; bind `plugin.omp-usage.panel` to another chord |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |
 | No update pill | Turn Tern's status bar on, or use the panel's Updates section; checks may be Off |
-| `omp Usage can't check for updates` | Needs git on `PATH` and, for a clone, a branch tracking a remote; the toast shows git's reason |
+| `omp Usage can't check for updates` | Needs git on `PATH`; a clone needs a branch tracking a remote, an installed copy its `upstream` file naming the repo (`https://github.com/jmazzola/tern-plugin-omp-usage.git`); the toast gives the reason |
+| `omp Usage couldn't link its repo's root` | A clone linked to the deprecated `omp-usage` folder: run `tern plugin link .` in the repo folder |
 | `omp Usage can't tell which version it is` | The repo its `upstream` file names has no commit at the installed version: a fork puts its own URL in `upstream` |
 | Edits to `window.luau` don't show | `tern plugin reload` |
 
