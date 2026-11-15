@@ -36,7 +36,7 @@ Hover it for each window's meter, reset time and saved resets:
 | Part | What it does |
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension: fetches `omp usage --json`, sets the line as an extension status, and caches every model's and provider's line. |
-| `plugin.toml`, `window.luau`, `update.luau`, `bar.css` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. Installed from Tern, it also puts the omp extension in `~/.omp/agent/extensions`. |
+| `plugin.toml`, `window.luau`, `update.luau`, `bar.css` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. Installed from Tern, it also puts a loader in `~/.omp/agent/extensions` that runs the omp extension from the plugin's folder. |
 
 Tested with Tern 0.9.18 and omp 18.19.0 on Windows.
 
@@ -52,8 +52,8 @@ should list them).
    tern plugin install github.com/jmazzola/tern-plugin-omp-usage
    ```
 
-   Within seconds it writes the omp extension to `~/.omp/agent/extensions/usage-remaining.js`, where omp loads it
-   without config, and says so:
+   Within seconds it writes `~/.omp/agent/extensions/usage-remaining.js`, which omp loads without config and which
+   runs the omp extension from the plugin's folder, so updates reach omp too. Then it says so:
 
    <img src="docs/images/toast-installed.png" alt="The toast omp Usage is installed, Restart omp sessions to see the usage line" width="540">
 
@@ -200,8 +200,8 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 
 <img src="docs/images/update-landing.png" alt="Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0" width="778">
 
-Installing over an installed copy (`tern plugin install --force`) rewrites its omp extension when that changed, and
-says so:
+When `~/.omp/agent/extensions/usage-remaining.js` has to change (the first time 0.5.2 or later loads after an
+update, or after the plugin's folder moved), it says so:
 
 <img src="docs/images/toast-extension-updated.png" alt="The toast omp Usage updated its omp extension, Restart omp sessions to use it" width="549">
 
@@ -220,7 +220,7 @@ says so:
 | --- | --- | --- |
 | Turn the plugin off | Preferences › Plugins | `tern plugin unlink omp-usage`, or Preferences › Plugins |
 | Turn it back on | Preferences › Plugins | `tern plugin link .` from the repo folder |
-| Remove it | `tern plugin remove omp-usage`, then delete `~/.omp/agent/extensions/usage-remaining.js` and restart omp | `tern plugin unlink omp-usage`, then delete the extension's line from `~/.omp/agent/config.yml` and restart omp |
+| Remove it | `tern plugin remove omp-usage` and restart omp; the file it left in `~/.omp/agent/extensions` then does nothing, so delete it when you like | `tern plugin unlink omp-usage`, then delete the extension's line from `~/.omp/agent/config.yml` and restart omp |
 
 ## Troubleshooting
 
