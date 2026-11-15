@@ -25,6 +25,8 @@ Hover it for each window's meter, reset time and saved resets:
   each, then fold into one (`+4 more accounts · lowest 7D 5%`).
 - **Reads at a glance.** Each window gets a bar in its provider's colors, amber at ≤25% left, red at ≤10%. When a
   share changes, a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
+- **The same in every pane.** omp sessions each check usage on their own clock; every pane shows the newest
+  numbers any of them got.
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
 - **Installs from Tern**: Preferences › Plugins › Install, or `tern plugin install`; it sets up its omp extension
   itself.
@@ -175,9 +177,11 @@ there. Its grip, now a cross, puts it back:
 
 <img src="docs/images/menu-accounts.png" alt="The palette's Claude accounts menu: All accounts (8 accounts, one after another), Combined (one set of windows, shares averaged), Combined by plan (same windows together, shares averaged), then each account that is on with what it has left" width="566">
 
-The extension caches every line in `~/.omp/cache/usage-remaining.json`. All and Selected providers, subagent
-models, accounts and the card's reset dates read it; a cache older than 10 minutes is ignored. An omp session
-started before the extension was updated stops writing it, so it can't put back what the update fixed.
+The extension caches every line in `~/.omp/cache/usage-remaining.json`. Current model, All and Selected providers,
+subagent models, accounts and the card's reset dates read it; a cache older than 10 minutes is ignored, and the
+line then shows the focused session's own status. Every omp session writes the newest numbers it fetched there, so
+every pane shows the same ones. A session whose numbers are older than the cache's leaves it alone, and one
+started before the extension was updated stops writing it, so neither can put back older numbers.
 
 ## Update
 
@@ -228,7 +232,7 @@ update, or after the plugin's folder moved), it says so:
 | --- | --- |
 | `tern plugin list` isn't `ready` | It prints the error; Tern's log is `%LOCALAPPDATA%\Tern\Logs\tern.log` |
 | No line | Focused pane is omp; its provider has limits; omp restarted after install; extension statuses on (step 2); `~/.omp/agent/extensions/usage-remaining.js` there (installed) or `extensions:` in `config.yml` naming it (clone) |
-| All/Selected show only the current model | The cache is stale: restart omp sessions |
+| All/Selected show only the current model, or panes show different numbers | The cache is stale: restart omp sessions |
 | The card's reset dates flip between two values | An omp session from before an update is still writing the cache: restart omp sessions |
 | Ctrl+Alt+U does nothing | Another binding took it; bind `plugin.omp-usage.panel` to another chord |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |

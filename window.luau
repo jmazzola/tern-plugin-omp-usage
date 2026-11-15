@@ -13,12 +13,14 @@
 --
 -- What the line shows depends on the mode (kept in `tern.kv`, set from the settings panel or the `omp Usage:
 -- Settings…` picker): the focused agent's provider (`current`), every provider in the cache (`all`) or the
--- chosen ones (`selected`), in the user's order. While a subagent's transcript is viewed (omp adds a `Viewing
--- <agent>` row to the composer and its model chip shows the subagent's model, but the status stays the main
--- session's), `current` shows the line the cache holds for that chip; otherwise it shows the status, which is
--- fresher. Without a fresh cache every mode falls back to the status. A provider signed in with several accounts
--- shows all of them, in the user's order, or only the one chosen for it (see `account_view`); the card then sums
--- up the others.
+-- chosen ones (`selected`), in the user's order. `current` shows the line the cache holds for the model chip's
+-- name: every omp session fetches on its own clock, and one started before an update keeps running the old code,
+-- so their statuses can disagree (one pane `Fable 7d 57%`, another `56%`), while the cache holds the newest fetch
+-- any up-to-date session made, the same for every pane. That also covers a viewed subagent's transcript (omp adds
+-- a `Viewing <agent>` row to the composer and its model chip shows the subagent's model, but the status stays the
+-- main session's). Without a fresh cache, or an entry for the chip, every mode falls back to the status. A
+-- provider signed in with several accounts shows all of them, in the user's order, or only the one chosen for it
+-- (see `account_view`); the card then sums up the others.
 --
 -- The line is an instrument strip: per provider its label, then per window its label, a slim bar filled to the
 -- share left with a lit tip, the share and its reset countdown, then saved resets; other statuses last. Each
@@ -1262,8 +1264,8 @@ local function signature_of(groups: { Group }, others: { string }, title: string
 end
 
 -- What the line shows. By the mode: every provider in the cache, or the chosen ones; or (with neither) the
--- focused agent's: while a subagent's transcript is viewed, the line the cache holds for its model's chip name
--- (an empty one: no usage line), else the status. The status's other parts follow either way, and saved resets
+-- focused agent's: the line the cache holds for its model chip's name (an empty one: no usage line), so every
+-- pane shows the same, newest numbers; else the status. The status's other parts follow either way, and saved resets
 -- come from the cache entry the line came from (the status's model is the chip's). Windows hidden in the
 -- settings are left out; a mode with providers to show shows them even when that leaves nothing. A provider with
 -- several accounts shows them as the settings say (see `account_view`).
@@ -1298,7 +1300,7 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 	end
 	if not listed then
 		local entry = if cache and dock.chip then cache.models[dock.chip :: string] else nil
-		if dock.viewing and entry then
+		if entry then
 			label, windows = parse_line(entry.line)
 			source = "model:" .. (dock.chip :: string)
 		else
@@ -1318,7 +1320,7 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 				rest = rest,
 			})
 			title = (label or "") .. (if label then " usage" else "Usage")
-			if source ~= "status" then
+			if dock.viewing and entry then
 				title ..= " · " .. (dock.chip :: string)
 			end
 		end
