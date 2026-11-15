@@ -416,7 +416,9 @@ local function setup_extension(cx: WindowCx)
 		return write_extension(tern.fs.read(EXTENSION_FILE, 4 * 1024 * 1024))
 	end)
 	if not ok then
-		cx:toast("error", "omp Usage couldn't set up its omp extension", tostring(wrote))
+		-- the error names the whole path, which the toast cuts short: it goes to Tern's log instead
+		tern.log.warn("omp-usage couldn't set up its omp extension: " .. tostring(wrote))
+		cx:toast("error", "omp Usage couldn't set up its omp extension", "Couldn't write ~/.omp/agent/extensions/usage-remaining.js")
 	elseif wrote == "new" then
 		cx:toast("success", "omp Usage is installed", "Restart omp sessions to see the usage line")
 	elseif wrote == "changed" then

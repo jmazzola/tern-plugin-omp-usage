@@ -53,7 +53,13 @@ should list them).
    ```
 
    Within seconds it writes the omp extension to `~/.omp/agent/extensions/usage-remaining.js`, where omp loads it
-   without config, and a toast says **omp Usage is installed**.
+   without config, and says so:
+
+   <img src="docs/images/toast-installed.png" alt="The toast omp Usage is installed, Restart omp sessions to see the usage line" width="540">
+
+   If it can't write that file, it says that instead, and Tern's log has why:
+
+   <img src="docs/images/toast-extension-failed.png" alt="The error toast omp Usage couldn't set up its omp extension, Couldn't write ~/.omp/agent/extensions/usage-remaining.js" width="499">
 
 2. **Show extension statuses** in omp's bar, where the plugin reads the line. Either:
 
@@ -91,9 +97,16 @@ An installed copy doesn't write its extension while `config.yml` already loads o
 > [!WARNING]
 > **The `omp-usage` folder is deprecated.** Since 0.5.0 the plugin is the repo itself. Clones linked to
 > `…/tern-plugin-omp-usage/omp-usage` (the old install) link the repo folder by themselves when they update to 0.5.0,
-> with a toast saying so; if a toast says it couldn't, run `tern plugin link .` in the repo folder. The folder
-> goes away in a later release, after which a clone still linked to it stops loading. `tern plugin list` shows which
-> folder yours uses.
+> and a toast says so:
+>
+> <img src="docs/images/toast-moved.png" alt="The toast omp Usage moved to its repo's root, Linking the repo folder in its place; no need to do anything" width="520">
+>
+> If it couldn't, a toast says where to run `tern plugin link .` yourself:
+>
+> <img src="docs/images/toast-link-failed.png" alt="The error toast omp Usage couldn't link its repo's root, In the tern-plugin-omp-usage folder, run: tern plugin link ." width="520">
+>
+> The folder goes away in a later release, after which a clone still linked to it stops loading. `tern plugin list`
+> shows which folder yours uses.
 
 ## Settings
 
@@ -187,6 +200,11 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 
 <img src="docs/images/update-landing.png" alt="Updating omp Usage to 0.3.0, Downloading the update and reloading the plugin, then the toast omp Usage updated to 0.3.0" width="778">
 
+Installing over an installed copy (`tern plugin install --force`) rewrites its omp extension when that changed, and
+says so:
+
+<img src="docs/images/toast-extension-updated.png" alt="The toast omp Usage updated its omp extension, Restart omp sessions to use it" width="549">
+
 - Commits that change only the README, its pictures or `.omp/` don't count; they don't light the pill and come along with
   the next real update.
 - It never merges or rebases your work in a clone. With local commits, or edits in the way, update by hand:
@@ -216,6 +234,7 @@ Open settings panels step aside while the update lands, so nothing flashes half-
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |
 | No update pill | Turn Tern's status bar on, or use the panel's Updates section; checks may be Off |
 | `omp Usage can't check for updates` | Needs git on `PATH`; a clone needs a branch tracking a remote, an installed copy its `upstream` file naming the repo (`https://github.com/jmazzola/tern-plugin-omp-usage.git`); the toast gives the reason |
+| `omp Usage couldn't set up its omp extension` | `~/.omp/agent/extensions` must be a folder omp Usage can write to; Tern's log has the error |
 | `omp Usage couldn't link its repo's root` | A clone linked to the deprecated `omp-usage` folder: run `tern plugin link .` in the repo folder |
 | `omp Usage can't tell which version it is` | The repo its `upstream` file names has no commit at the installed version: a fork puts its own URL in `upstream` |
 | Edits to `window.luau` don't show | `tern plugin reload` |

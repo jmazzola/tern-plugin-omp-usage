@@ -4,7 +4,9 @@
 -- and Tern loads the plugin from there. Remove this folder once clones from before 0.5.0 have updated.
 
 local root = string.match(tern.plugin.dir, "^(.*)[/\\][^/\\]+[/\\]?$") or (tern.plugin.dir .. "/..")
-local failed = 'Link it yourself: tern plugin link "' .. root .. '"'
+-- The toast cuts a long line short, so it names the repo's folder, not the whole path to it.
+local folder = string.match(root, "([^/\\]+)[/\\]?$") or root
+local failed = "In the " .. folder .. " folder, run: tern plugin link ."
 
 tern.timer(0, function(cx: WindowCx?)
 	-- Said before linking: a link that works reloads the plugins, which ends this VM before the link's own end
