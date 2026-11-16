@@ -13,8 +13,7 @@
 -- (no automatic toast or button again until a newer commit changes the plugin) and Not Now, over every commit that
 -- changes it, in full.
 --
--- An installed copy also puts a loader of its omp extension in `~/.omp/agent/extensions`, unless omp's config.yml
--- already loads one. The loader imports the extension from the plugin's folder, so updates reach omp through it.
+-- An installed copy also has omp load its extension, through omp's plugin manager (extension.luau).
 --
 -- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows that
 -- tick together claim the check, and the claim that lands last wins), and the pending update, a skipped version and
@@ -75,7 +74,6 @@ local UPDATE_ACTION = "plugin." .. tern.plugin.id .. ".update"
 -- What an update covers: every file but the README, its pictures and the project's own notes. The omp extension
 -- (`omp/`) is one of them.
 local EXTENSION_DIR = "omp"
-local EXTENSION_FILE = "omp/extensions/usage-remaining.js"
 local PLUGIN_PATHS = { "--", ":/", ":(top,exclude)README.md", ":(top,exclude)docs", ":(top,exclude).omp" }
 -- An installed copy's mirror, and the ref there that follows the upstream's default branch, the only one fetched.
 local MIRROR = tern.plugin.data .. "/source"
@@ -87,10 +85,8 @@ local UPSTREAM_FILE = "upstream"
 -- of about this much, and a single file can't be bigger than BLOB_MAX.
 local BATCH_BYTES = 4 * 1024 * 1024
 local BLOB_MAX = 16 * 1024 * 1024 - 1024
--- Where an installed copy puts the omp extension's loader: omp loads every module in its agent directory's
--- `extensions/`.
-local HOME = tern.getenv("USERPROFILE") or tern.getenv("HOME")
-local EXTENSION_TARGET = if HOME and HOME ~= "" then HOME .. "/.omp/agent/extensions/usage-remaining.js" else nil
+-- Has omp load the extension (extension.luau).
+local extension = require("./extension")
 local KV_INSTALLED = "omp-usage.installed" -- `{ sha, version }`: the commit an installed copy last wrote
 local SETUP_MS = 3000 -- after a load, before an installed copy sets up the omp extension
 
@@ -391,65 +387,8 @@ local function blobs(cx: WindowCx, src: Source, rev: string, files: { Entry }, d
 	fetch_batch(1, cx)
 end
 
--- The loader omp loads from its extensions directory: it imports the extension from the plugin's folder, so the
--- extension's own imports resolve beside it (a fork's extension may span several files), an update reaches omp
--- without touching the loader, and a session's check whether its extension changed on disk looks at the file updates
--- replace. Once the plugin is removed, the import's file is gone and the loader does nothing.
-local function loader(): string
-	local source = string.gsub(tern.plugin.dir .. "/" .. EXTENSION_FILE, "\\", "/")
-	return "// Written by the omp Usage plugin for Tern: it loads the plugin's omp extension from the plugin's folder.\n"
-		.. "// After `tern plugin remove omp-usage` it does nothing; delete it then if you like.\n"
-		.. 'import { existsSync } from "node:fs";\n'
-		.. 'import { pathToFileURL } from "node:url";\n'
-		.. "\n"
-		.. "const source = "
-		.. string.format("%q", source)
-		.. ";\n"
-		.. "export default existsSync(source) ? (await import(pathToFileURL(source).href)).default : () => {};\n"
-end
-
--- Writes the extension's loader where omp loads it: "new" when there was none, "changed" when it was another (an
--- older copy of the extension itself, or a loader from where the plugin was before), nil when it was this one
--- already, omp's config.yml loads one, or there's no home directory to put it in.
-local function write_extension(): string?
-	if EXTENSION_TARGET == nil then
-		return nil
-	end
-	local target = EXTENSION_TARGET :: string
-	-- already installed another way: omp's config.yml loads one (a clone's), and a second copy would run it twice
-	local config_ok, config = pcall(tern.fs.read, (HOME :: string) .. "/.omp/agent/config.yml", 1024 * 1024)
-	if config_ok and string.find(config, "usage-remaining.js", 1, true) then
-		return nil
-	end
-	if not tern.fs.exists(EXTENSION_FILE) then
-		error("the plugin has no " .. EXTENSION_FILE)
-	end
-	local want = loader()
-	local found, have = pcall(tern.fs.read, target, 4 * 1024 * 1024)
-	if found and have == want then
-		return nil
-	end
-	tern.fs.mkdir((string.match(target, "^(.*)/[^/]*$")) :: string)
-	tern.fs.write(target, want)
-	return if found then "changed" else "new"
-end
-
--- An installed copy's omp extension loader; says so when it wrote one.
-local function setup_extension(cx: WindowCx)
-	local ok, wrote = pcall(write_extension)
-	if not ok then
-		-- the error names the whole path, which the toast cuts short: it goes to Tern's log instead
-		tern.log.warn("omp-usage couldn't set up its omp extension: " .. tostring(wrote))
-		cx:toast("error", "omp Usage couldn't set up its omp extension", "Couldn't write ~/.omp/agent/extensions/usage-remaining.js")
-	elseif wrote == "new" then
-		cx:toast("success", "omp Usage is installed", "Restart omp sessions to see the usage line")
-	elseif wrote == "changed" then
-		cx:toast("info", "omp Usage updated its omp extension", "Restart omp sessions to use it")
-	end
-end
-
 -- An installed copy's update: the repo's files as of `sha` written over the copy (those `sha` dropped deleted),
--- the omp extension among them, which omp's loader imports from here. The copy's `upstream` file stays as it is: it
+-- the omp extension among them, which omp's plugin link points at. The copy's `upstream` file stays as it is: it
 -- names where the user wants updates from. All the writes happen in one go, so a reload Tern starts on the first
 -- change finds them all. `done` gets why when nothing was written.
 local function land(cx: WindowCx, src: Source, sha: string, done: (string?, WindowCx) -> ())
@@ -1170,7 +1109,7 @@ end
 if INSTALLED then
 	tern.timer(SETUP_MS, function(cx: WindowCx?)
 		if cx then
-			setup_extension(cx)
+			extension.setup(cx, false)
 		end
 	end)
 end
