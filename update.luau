@@ -1105,8 +1105,8 @@ end
 if tern.runtime.os ~= "ios" then -- no processes there, so no git
 	tern.timer(FIRST_CHECK_MS, tick)
 end
--- An installed copy, once it loads, puts its omp extension where omp loads it.
-if INSTALLED then
+-- An installed copy, once it loads, has omp load its extension (no processes on iOS, so no omp either).
+if INSTALLED and tern.runtime.os ~= "ios" then
 	tern.timer(SETUP_MS, function(cx: WindowCx?)
 		if cx then
 			extension.setup(cx, false)
