@@ -1,0 +1,9 @@
+{
+  "name": "omp-usage",
+  "private": true,
+  "description": "The omp Usage plugin's omp extension: quota lines and details for the Tern plugin to draw.",
+  "type": "module",
+  "omp": {
+    "extensions": ["./extensions/usage-remaining.js"]
+  }
+}
