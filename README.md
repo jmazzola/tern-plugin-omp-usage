@@ -30,7 +30,7 @@ Hover it for each window's meter, reset time and saved resets:
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
 - **Installs from Tern**: Preferences › Plugins › Install, or `tern plugin install`; it sets up its omp extension
   itself.
-- **Updates itself** like Tern does: an **Update omp Usage** pill in the status line, one click to see what's new
+- **Updates itself** like Tern does: an **Update omp Usage** pill in the widget bar, one click to see what's new
   and install it. Nothing pops up over your work.
 
 <img src="docs/images/update-card.png" alt="The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now" width="991">
@@ -40,7 +40,7 @@ Hover it for each window's meter, reset time and saved resets:
 | `omp/extensions/usage-remaining.js` | omp extension: fetches `omp usage --json`, sets the line as an extension status, and caches every model's and provider's line. |
 | `plugin.toml`, `window.luau`, `update.luau`, `bar.css` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds the settings panel and updates. Installed from Tern, it also puts a loader in `~/.omp/agent/extensions` that runs the omp extension from the plugin's folder. |
 
-Tested with Tern 0.9.18 and omp 18.19.0 on Windows.
+Tested with Tern 0.9.26 and omp 18.22.0 on Windows.
 
 ## Install
 
@@ -112,7 +112,7 @@ An installed copy doesn't write its extension while `config.yml` already loads o
 
 ## Settings
 
-Open the panel with **Ctrl+Alt+U** (rebind `plugin.omp-usage.panel`), **usage** in the status bar, or **omp Usage:
+Open the panel with **Ctrl+Alt+U** (rebind `plugin.omp-usage.panel`), **usage** in the widget bar, or **omp Usage:
 Settings panel** in the palette. Changes apply at once, in every window.
 
 | Section | What it does |
@@ -187,12 +187,15 @@ started before the extension was updated stops writing it, so neither can put ba
 
 The plugin checks its repo every 6 hours (Hourly, Daily, Weekly or Off in the panel): a clone's remote, or for an
 installed copy a copy of the repo it keeps in its data folder. When there's a new version, a toast says so once and
-an **Update omp Usage** pill sits in the status line until you deal with it:
+an **Update omp Usage** pill sits in the widget bar until you deal with it:
 
-<img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.3.0 is available, You have 0.2.0, with Download Update and What's New, and the Update omp Usage pill at the right of the status line" width="638">
+<img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.5.4 is available, You have 0.5.3, with Download Update and What's New, and the Update omp Usage pill at the right of the widget bar" width="495">
 
-Click it (or **Check for Updates**) for the update card shown at the top: the version available, the one you have,
-and every new commit in full.
+The pill and **usage** are plugin segments: they show while the widget bar has its **Plugin segments** widget
+(palette › Edit widgets…).
+
+Click the pill (or **Check for Updates**) for the update card shown at the top: the version available, the one you
+have, and every new commit in full.
 
 | Button | What it does |
 | --- | --- |
@@ -236,7 +239,7 @@ update, or after the plugin's folder moved), it says so:
 | The card's reset dates flip between two values | An omp session from before an update is still writing the cache: restart omp sessions |
 | Ctrl+Alt+U does nothing | Another binding took it; bind `plugin.omp-usage.panel` to another chord |
 | Line stopped after an omp or Tern update | omp may have renamed what the plugin reads: ask omp to fix `omp-usage` |
-| No update pill | Turn Tern's status bar on, or use the panel's Updates section; checks may be Off |
+| No update pill, or no **usage** | Add the **Plugin segments** widget to Tern's widget bar (palette › Edit widgets…), or use the panel's Updates section; checks may be Off |
 | `omp Usage can't check for updates` | Needs git on `PATH`; a clone needs a branch tracking a remote, an installed copy its `upstream` file naming the repo (`https://github.com/jmazzola/tern-plugin-omp-usage.git`); the toast gives the reason |
 | `omp Usage couldn't set up its omp extension` | `~/.omp/agent/extensions` must be a folder omp Usage can write to; Tern's log has the error |
 | `omp Usage couldn't link its repo's root` | A clone linked to the deprecated `omp-usage` folder: run `tern plugin link .` in the repo folder |

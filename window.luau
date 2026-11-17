@@ -2619,7 +2619,7 @@ end)
 tern.timer(300, tick)
 
 -- Settings, two ways: the panel (a canvas beside the focused pane: the `omp Usage: Settings panel` command,
--- Ctrl+Alt+U, or `usage` in the status bar) and pickers (`omp Usage: Settings…`). Both store what is chosen in
+-- Ctrl+Alt+U, or `usage` in the widget bar) and pickers (`omp Usage: Settings…`). Both store what is chosen in
 -- `tern.kv` and redraw the line at once; the menus and the panel are built by the plain functions below.
 
 -- The providers on offer, in the user's order.
@@ -5082,7 +5082,7 @@ tern.command({
 	end,
 })
 
--- `usage` in the status bar, on an agent pane: a click opens the panel. On every pane, while an update is waiting,
+-- `usage` in the widget bar, on an agent pane: a click opens the panel. On every pane, while an update is waiting,
 -- Update omp Usage (update.luau) first.
 local STATUS: { StatusSegment } = { { text = "usage", icon = "gauge", command = PANEL_ACTION } }
 

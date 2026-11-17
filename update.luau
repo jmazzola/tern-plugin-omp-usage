@@ -6,7 +6,7 @@
 -- At the interval the user picks (every 6 hours unless changed, or never), an automatic check fetches the upstream.
 -- When it has commits that change the plugin (PLUGIN_PATHS: every file but the README, its pictures and the
 -- project's notes), it remembers the update as pending, says so in a toast, and every window shows an Update omp
--- Usage button in its status line. That button, `omp Usage: Check for updates…` and the settings panel's Check for
+-- Usage button in its widget bar. That button, `omp Usage: Check for updates…` and the settings panel's Check for
 -- Updates check again and open the update card: the version that's available and the one you have (from
 -- `plugin.toml` on each side, else commit hashes), Download Update (a clone fast-forwards to the upstream's tip; an
 -- installed copy has the tip's files written over it; either way Tern then reloads the plugin), Skip This Version
@@ -599,8 +599,8 @@ local function update_name(version: string?, current: string?, short: string): s
 	return short
 end
 
--- The status line's Update omp Usage button: every pane of every window, while an update is pending. Formatters
--- must be pure and fast, so it reads what `refresh_badge` last saw rather than `tern.kv`.
+-- The widget bar's Update omp Usage button, among its Plugin segments: every pane of every window, while an update
+-- is pending. Formatters must be pure and fast, so it reads what `refresh_badge` last saw rather than `tern.kv`.
 local badge: Pending? = nil
 
 function M.status_segment(): StatusSegment?
@@ -1114,7 +1114,7 @@ function M.check(cx: WindowCx, manual: boolean)
 										cx9:toast(
 											"info",
 											"omp Usage " .. name .. " is available",
-											"Update omp Usage in the status bar, or Check for Updates in its settings"
+											"Update omp Usage in the widget bar, or Check for Updates in its settings"
 										)
 									end
 								end)
