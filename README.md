@@ -48,7 +48,7 @@ Hover it for each window's meter, reset time and saved resets:
 | --- | --- |
 | `omp/extensions/usage-remaining.js` | omp extension: fetches native and configured external quotas, sets the line as an extension status, and caches every model's and provider's line and details. `omp/package.json` names it, so `omp plugin link` can load the `omp/` folder as omp's plugin `omp-usage`. |
 | `omp/extensions/usage-sources/` | CLIProxyAPI and Keeper clients, source configuration, observation freshness, and semantic quantity/estimate formatting. |
-| `plugin.toml`, `window.luau`, `details.luau`, `update.luau`, `extension.luau`, `bar.css` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds native quota details, the settings panel and updates. Installed from Tern, it also links its `omp/` folder into omp's plugins, so omp runs the extension from there. |
+| `plugin.toml`, `*.luau`, `bar.css` | Tern plugin: draws the line above the context bar, hides the statuses it redraws from omp's bar (keeping the session cost), and adds native quota details, the settings panel and updates. Installed from Tern, it also links its `omp/` folder into omp's plugins, so omp runs the extension from there. `window.luau` runs it: `data.luau` reads the cache, the settings and omp's composer, `render.luau` draws the line and its card, `pickers.luau` and `panel.luau` are the settings, `details.luau` the quota details, `update.luau` the updates and `extension.luau` omp's link. |
 
 Tested with Tern 0.9.26 and omp 18.22.0 on Windows. Source checks use local HTTP fixtures; native quota details
 are checked on Linux with Node 26.13.1, omp 18.18.9, and Tern 0.9.18 using redacted quota-cache replays in the
@@ -477,6 +477,6 @@ moved), it says so:
 | `omp Usage couldn't set up its omp extension` | Tern couldn't run `omp plugin`: omp must be on the `PATH` Tern started with. Tern's log has omp's reason and the `omp plugin link …` command to run yourself |
 | `omp Usage couldn't link its repo's root` | A clone linked to the deprecated `omp-usage` folder: run `tern plugin link .` in the repo folder |
 | `omp Usage can't tell which version it is` | The repo its `upstream` file names has no commit at the installed version: a fork puts its own URL in `upstream` |
-| Edits to `window.luau` don't show | `tern plugin reload` |
+| Edits to the plugin's `.luau` files don't show | `tern plugin reload` |
 
 Don't edit Tern's `settings.json` from PowerShell: it adds a BOM and Tern falls back to defaults.
