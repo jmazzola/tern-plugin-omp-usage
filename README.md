@@ -18,8 +18,8 @@ Hover it for each window's meter, reset time and saved resets:
 
 What it does:
 
-- follows your model: the active model's provider (anything `omp usage` reports - Claude, Codex, Kimi, Gemini, Muse
-  Code, …), switching within ~2 s of Alt+P, or to a subagent's model while you're viewing its transcript. New
+- follows your model: the active model's provider (anything `omp usage` reports - Claude, Codex, Kimi, Gemini, Grok,
+  Muse Code, …), switching within ~2 s of Alt+P, or to a subagent's model while you're viewing its transcript. New
   providers and windows just show up.
 - or every provider, or only the ones you pick, in your order
 - several accounts on one provider: all of them (`Claude dev.ops 5H … · a.k.chen 5H …`), only the one you pick, or

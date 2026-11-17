@@ -46,6 +46,7 @@ local PROVIDER_ORDER = {
 	"alibaba-token-plan",
 	"synthetic",
 	"devin",
+	"xai",
 }
 local LABEL_IDS: { [string]: string } = {
 	Claude = "anthropic",
@@ -59,6 +60,7 @@ local LABEL_IDS: { [string]: string } = {
 	Qwen = "alibaba-token-plan",
 	Synthetic = "synthetic",
 	Devin = "devin",
+	Grok = "xai",
 }
 -- A provider's colors: `a` for its label and the start of its bars, `b` (else `a`) for where they end, their
 -- tips and its comets. Each is a shade per theme, so it reads on light and dark alike.
@@ -86,6 +88,7 @@ local PRESETS: { [string]: Palette } = {
 	["opencode-go"] = { name = "Go cyan", a = "light-dark(#0a8aa1, #2ccde6)" },
 	["alibaba-token-plan"] = { name = "Qwen purple", a = "light-dark(#6c4fd0, #a088ff)" },
 	devin = { name = "Devin teal", a = "light-dark(#0e8c80, #34c8b6)" },
+	xai = { name = "Grok mono", a = "light-dark(#52525b, #a1a1aa)", b = "light-dark(#18181b, #fafafa)" },
 }
 local ACCENT: Palette = { name = "Theme accent", a = "var(--accent)" }
 -- The alternatives the settings offer for any provider.
