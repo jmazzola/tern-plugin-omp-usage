@@ -282,14 +282,14 @@ token capacity. Plan and observation time remain visible. Normal estimates use n
 and red remain reserved for low quotas, stale observations and errors. Plan ids read as names
 (`pro-20x` shows as `Pro 20x`); a plan the source already capitalizes stays as reported.
 
-The details for omp's own Claude and Codex reports, in Tern's Titanium dark theme: a box per window with its share,
-bar, saved resets and reset time, side by side while they fit. A CPA or Keeper source adds the plan as a chip
-beside the account, its observation time, and **Observed usage** / **Estimated remaining** under each window's
-bar:
+The details in Tern's Titanium dark theme, with sample data shaped like a Keeper source's (two Claude accounts and
+Codex): each account under its own heading with its plan as a chip and the observation time, a box per window
+with its share, bar and resets, side by side while they fit, and **Observed usage** / **Estimated remaining**
+under each window's bar. A window running low is ringed in `--warn`, nearly empty in `--bad`:
 
-<img src="docs/images/card-summary.png" alt="Native Tern quota details: a USAGE label, then Claude with its swatch over a hairline and two boxes side by side, Weekly window 93% left with a saved reset in Claude's color and its reset time, and Fable weekly window 87% left; then Codex with one Weekly window box at 98% left, three saved resets and its reset time" width="794">
+<img src="docs/images/card-summary.png" alt="Quota details with sample data: Claude alice with a Max 20x chip and its observation time, a 5-hour window at 64% left with 1.21M tokens observed (USD 18.40) and 2.15M estimated remaining (USD 32.71), and a weekly window at 41% left with a saved reset; Claude bob with a Pro chip, its 5-hour window ringed amber at 18% left and its weekly window ringed red at 9% left, then a stale-data note; Codex with a Team chip, 88% and 73% left; the estimate disclaimer at the end" width="797">
 
-A Keeper source's hover summary: under the weekly bar, the estimated tokens left (`633.04M`) and their
+A real Keeper source's hover summary: under the weekly bar, the estimated tokens left (`633.04M`) and their
 API-equivalent value (`$533.10`), each after its icon, and the plan as a pill on the title row:
 
 <img src="docs/images/hover-summary.png" alt="Quota hover summary over the usage line: Codex@dashboard usage with a gold Pro 20x pill, the weekly window at 71% left, under its bar a tokens icon with 633.04M and a dollar icon with $533.10, then one saved reset, the reset time and a last row naming the details and settings shortcuts" width="348">
