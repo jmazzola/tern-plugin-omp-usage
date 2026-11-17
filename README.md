@@ -31,9 +31,10 @@ Hover it for each window's meter, reset time and saved resets:
   quota windows alongside native omp reports. Each source stays a separate account pool.
 - **Native quota details.** A Tern-native view with readable value typography, rounded quota bars, plan
   badges, and **Observed usage** / **Estimated remaining** metrics. Open it with **Shift+Alt+U**, `usage`
-  in the widget bar's **Plugin segments**, or the palette. Estimates describe the remaining workload, not
-  official token allowances or cash balances. The hover keeps to the estimates; observed usage, observation
-  time and every other quantity are in the details, which scroll and adapt to narrow windows.
+  in the widget bar's **Plugin segments**, **Quota details** in the settings panel, or the palette. Estimates
+  describe the remaining workload, not official token allowances or cash balances. The hover keeps to the
+  estimates; observed usage, observation time and every other quantity are in the details, which scroll and adapt
+  to narrow windows.
 - **The same in every pane.** omp sessions each check usage on their own clock; every pane shows the newest
   numbers any of them got.
 - **Settings panel** (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors.
@@ -267,9 +268,10 @@ The compact line and hover remain percentage instruments with reset times, saved
 warnings; the hover adds each window's estimated remaining tokens and API-equivalent value, and the plan.
 The line itself takes no clicks: it is drawn over omp's composer, where Tern gives plugins no click
 events. Open the full native view with **Shift+Alt+U** (rebind `plugin.omp-usage.details`), **usage**
-in the widget bar's **Plugin segments**, or **omp Usage: Quota details** in the palette. The hover's last row
-names both shortcuts. In the view, **Settings** opens preferences and **Close** dismisses it; **Ctrl+Alt+U**
-still opens settings directly.
+in the widget bar's **Plugin segments**, **Quota details** at the end of the settings panel's bottom bar, or
+**omp Usage: Quota details** in the palette. The hover's last row names both shortcuts. The details take the
+panel's place; in the view, **Settings** brings the panel back and **Close** dismisses it; **Ctrl+Alt+U** still
+opens settings directly.
 
 Tern shows plugin segments only in the **Plugin segments** widget, which you place yourself (palette ›
 **Edit widgets…**); `usage` shows there while an omp pane has focus.

@@ -73,14 +73,15 @@ local move_account = pickers.move_account
 local after_change = pickers.after_change
 local prompt_color = pickers.prompt_color
 
--- The dock window.luau last read, which the preview of the line is drawn from. window.luau requires this module,
--- so it hands over how to read it with `init`.
+-- The dock window.luau last read, which the preview of the line is drawn from, and how the quota details open.
+-- window.luau requires this module, so it hands both over with `init`.
 local last_dock: () -> Dock? = function(): Dock?
 	return nil
 end
+local open_details: (cx: WindowCx) -> () = function(_cx: WindowCx) end
 
-local function init(dock: () -> Dock?)
-	last_dock = dock
+local function init(dock: () -> Dock?, details: (cx: WindowCx) -> ())
+	last_dock, open_details = dock, details
 end
 
 -- The panel's pane while it is open, and what redraws it (below).
@@ -830,7 +831,7 @@ $D {
 	white-space: nowrap;
 	color: var(--t3);
 }
-$D .sf-icon {
+$D > .sf-icon {
 	color: var(--ok);
 }
 $D .oup-sep {
@@ -838,6 +839,10 @@ $D .oup-sep {
 	height: 12px;
 	margin: 0 6px;
 	background-color: var(--l3);
+}
+/* Quota details, at the bar's far end */
+$D .oup-grow {
+	flex: 1;
 }
 $D .oup-hint {
 	display: flex;
@@ -1518,6 +1523,14 @@ local function panel_dock(keys: string?): Node
 			ui.el("span", { text = "opens this panel" }),
 		}))
 	end
+	local keys_of_details = details_shortcut()
+	table.insert(children, ui.el("span", { class = "oup-grow" }))
+	table.insert(children, ui.button("Quota details", {
+		icon = "gauge",
+		variant = "quiet",
+		title = if keys_of_details then "Open the quota details (" .. keys_of_details .. ")" else "Open the quota details",
+		actions = { click = "details" },
+	}))
 	return ui.el("div", { role = DOCK_ROLE }, children)
 end
 
@@ -1710,6 +1723,13 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 	if ev.title == detail_view.title and ev.act == "settings" then
 		detail_view.close(cx, ev.pane)
 		open_panel(cx)
+		return true
+	end
+	-- Quota details in the bottom bar: the details take the panel's place, as their Settings button gives it back.
+	if ev.title == PANEL_TITLE and ev.act == "details" then
+		cx.layout:close(ev.pane)
+		panel_pane, panel_sig, moving = nil, nil, nil
+		open_details(cx)
 		return true
 	end
 	if ev.title ~= nil and ev.title ~= PANEL_TITLE then

@@ -229,12 +229,18 @@ refresh = function(cx: WindowCx)
 	end
 end
 
+-- Opens the quota details: the `details` command, and Quota details in the settings panel.
+local function open_details(cx: WindowCx)
+	refresh(cx)
+	sync_details(cx, true)
+end
+
 -- A change from the pickers or the panel redraws through `refresh` and the panel; the panel previews the dock
--- `show_pane` last read.
+-- `show_pane` last read, and opens the details.
 pickers.init(refresh, flush_panel)
 panel.init(function(): Dock?
 	return last_dock
-end)
+end, open_details)
 
 local function tick(cx: WindowCx?)
 	if cx then
@@ -348,10 +354,7 @@ tern.command({
 	title = "omp Usage: Quota details",
 	icon = "gauge",
 	keys = { "shift+alt+u" },
-	run = function(cx: WindowCx)
-		refresh(cx)
-		sync_details(cx, true)
-	end,
+	run = open_details,
 })
 
 tern.command({
