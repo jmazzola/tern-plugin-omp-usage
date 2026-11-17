@@ -47,6 +47,12 @@ local PROVIDER_ORDER = {
 	"synthetic",
 	"devin",
 	"xai",
+	"muse-code",
+	"github-copilot",
+	"cursor",
+	"zai",
+	"zai-coding-plan",
+	"factory-droid",
 }
 local LABEL_IDS: { [string]: string } = {
 	Claude = "anthropic",
@@ -61,6 +67,11 @@ local LABEL_IDS: { [string]: string } = {
 	Synthetic = "synthetic",
 	Devin = "devin",
 	Grok = "xai",
+	Muse = "muse-code",
+	Copilot = "github-copilot",
+	Cursor = "cursor",
+	Zai = "zai",
+	Factory = "factory-droid",
 }
 -- A provider's colors: `a` for its label and the start of its bars, `b` (else `a`) for where they end, their
 -- tips and its comets. Each is a shade per theme, so it reads on light and dark alike.
@@ -79,7 +90,11 @@ local PRESETS: { [string]: Palette } = {
 		a = "light-dark(#1a66d9, #4f8ff7)",
 		b = "light-dark(#7f9fd6, #f4f7ff)",
 	},
-	["google-antigravity"] = { name = "Antigravity blue", a = "light-dark(#3a58d6, #7390ff)" },
+	["google-antigravity"] = {
+		name = "Green to blue",
+		a = "light-dark(#15803d, #4ade80)",
+		b = "light-dark(#1d4ed8, #60a5fa)",
+	},
 	["minimax-code"] = {
 		name = "Red to pink",
 		a = "light-dark(#d23f57, #f2576f)",
@@ -87,8 +102,15 @@ local PRESETS: { [string]: Palette } = {
 	},
 	["opencode-go"] = { name = "Go cyan", a = "light-dark(#0a8aa1, #2ccde6)" },
 	["alibaba-token-plan"] = { name = "Qwen purple", a = "light-dark(#6c4fd0, #a088ff)" },
-	devin = { name = "Devin teal", a = "light-dark(#0e8c80, #34c8b6)" },
+	devin = { name = "Teal to white", a = "light-dark(#0e8c80, #34c8b6)", b = "light-dark(#134e4a, #ecfeff)" },
 	xai = { name = "Grok mono", a = "light-dark(#52525b, #a1a1aa)", b = "light-dark(#18181b, #fafafa)" },
+	["muse-code"] = { name = "Pink to blue", a = "light-dark(#be185d, #f472b6)", b = "light-dark(#1d5fd6, #5b9bff)" },
+	["github-copilot"] = { name = "Purple to cyan", a = "light-dark(#7c3aed, #b083f0)", b = "light-dark(#0e7490, #22d3ee)" },
+	cursor = { name = "White to green", a = "light-dark(#27272a, #e4e4e7)", b = "light-dark(#047857, #34d399)" },
+	zai = { name = "Indigo to teal", a = "light-dark(#4338ca, #818cf8)", b = "light-dark(#0f766e, #2dd4bf)" },
+	["zai-coding-plan"] = { name = "Indigo to teal", a = "light-dark(#4338ca, #818cf8)", b = "light-dark(#0f766e, #2dd4bf)" },
+	["factory-droid"] = { name = "Orange to violet", a = "light-dark(#c2410c, #fb923c)", b = "light-dark(#6d28d9, #a78bfa)" },
+	synthetic = { name = "Violet to white", a = "light-dark(#7e22ce, #c084fc)", b = "light-dark(#581c87, #faf5ff)" },
 }
 local ACCENT: Palette = { name = "Theme accent", a = "var(--accent)" }
 -- The alternatives the settings offer for any provider.

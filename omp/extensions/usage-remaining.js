@@ -191,6 +191,7 @@ const PROVIDER_LABELS = {
   synthetic: "Synthetic",
   devin: "Devin",
   xai: "Grok",
+  "github-copilot": "Copilot",
 };
 
 // Words in provider ids that name the product or plan, not the provider.
