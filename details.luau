@@ -29,7 +29,8 @@ export type Row = {
 
 type Amounts = { tokens: string?, cost: string? }
 type Window = { row: Row, notes: { Row }, used: Amounts, estimated: Amounts }
-type Account = { title: string?, windows: { Window }, notes: { Row } }
+-- `color`: its heading's (a provider's palette color, or a muted one for an account summed up on one row)
+type Account = { title: string?, color: string?, windows: { Window }, notes: { Row } }
 
 local M = {
 	pane = nil :: number?,
@@ -38,15 +39,21 @@ local M = {
 	title = TITLE,
 }
 
+-- In the settings panel's voice (panel.luau's PANEL_CSS): mono micro-labels over hairlines, each account in its
+-- provider's colors (the palette rules set `--ou-g<N>-a|b`), quiet wells for the windows. Colors from the palette
+-- go through relative colors: Tern drops a gradient stop whose `var()` holds `light-dark()`. No transitions or
+-- animations, so Reduce Motion has nothing to stop.
 local CSS = [==[
 [data-role='omp-usage.details'] {
 	display: flex;
 	flex-direction: column;
-	gap: 24px;
-	max-width: 720px;
+	gap: 30px;
+	box-sizing: border-box;
+	width: 100%;
+	max-width: 800px;
 	margin: 0 auto;
-	padding: 24px;
-	font: 400 13px/20px var(--sans);
+	padding: 22px 22px 30px;
+	font: 400 12.5px/18px var(--sans);
 	color: var(--t2);
 	--oc-head: var(--t1);
 	--oc-win-ok: var(--t1);
@@ -55,120 +62,239 @@ local CSS = [==[
 	--oc-mute: var(--t3);
 	--oc-soft: var(--t2);
 	--oc-warn: var(--warn);
+	--oud-pa: var(--accent);
+	--oud-pb: var(--accent);
 }
-[data-role='omp-usage.details'] .oud-heading {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 10px;
-}
+/* the view's title, over several accounts: a micro-label, as the panel heads its sections */
 [data-role='omp-usage.details'] .oud-title {
-	font: 600 18px/24px var(--sans);
-	color: var(--t1);
-	overflow-wrap: anywhere;
-}
-[data-role='omp-usage.details'] .oud-plan {
-	padding: 2px 8px;
-	border-radius: 999px;
-	background-color: var(--l1);
-	font: 500 11px/16px var(--sans);
-	color: var(--t2);
+	margin-bottom: -10px;
+	font: 600 10px/14px var(--mono);
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--t3);
 	overflow-wrap: anywhere;
 }
 [data-role='omp-usage.details'] .oud-account {
 	display: flex;
 	flex-direction: column;
-	gap: 18px;
+	gap: 12px;
 	min-width: 0;
 }
-[data-role='omp-usage.details'] .oud-account + .oud-account {
-	padding-top: 24px;
-	border-top: 1px solid var(--l2);
+/* an account's head over a hairline: its provider's swatch and name, the plan it names, when it was observed */
+[data-role='omp-usage.details'] .oud-heading {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+	padding: 0 2px 9px;
+	border-bottom: 1px solid var(--l2);
+}
+[data-role='omp-usage.details'] .oud-swatch {
+	flex: none;
+	width: 20px;
+	height: 6px;
+	border-radius: 3px;
+	background-image: linear-gradient(90deg, rgb(from var(--oud-pa) r g b), rgb(from var(--oud-pb) r g b));
+	box-shadow: 0 0 10px -1px rgb(from var(--oud-pb) r g b / 55%);
 }
 [data-role='omp-usage.details'] .oud-account-title {
-	font: 600 14px/20px var(--sans);
-	color: var(--t1);
+	min-width: 0;
+	font: 600 13px/18px var(--mono);
+	color: rgb(from var(--oud-pa) r g b);
 	overflow-wrap: anywhere;
+}
+[data-role='omp-usage.details'] .oud-plan {
+	flex: none;
+	height: 20px;
+	padding: 0 8px;
+	border-radius: 10px;
+	font: 500 10.5px/20px var(--mono);
+	white-space: nowrap;
+	color: rgb(from var(--oud-pa) r g b);
+	background-color: rgb(from var(--oud-pa) r g b / 10%);
+	box-shadow: 0 0 0 1px rgb(from var(--oud-pa) r g b / 40%);
+}
+[data-role='omp-usage.details'] .oud-stamp {
+	margin-left: auto;
+	font: 500 10.5px/14px var(--mono);
+	font-variant-numeric: tabular-nums;
+	color: var(--t3);
+	overflow-wrap: anywhere;
+}
+/* the account's windows: wells side by side, a column when the pane is narrow */
+[data-role='omp-usage.details'] .oud-windows {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
 }
 [data-role='omp-usage.details'] .oud-window {
 	display: flex;
+	flex: 1 1 300px;
 	flex-direction: column;
-	gap: 10px;
+	gap: 9px;
 	min-width: 0;
+	padding: 12px 14px 13px;
+	border-radius: 10px;
+	background-color: var(--well);
+	box-shadow:
+		0 0 0 1px var(--l1),
+		inset 0 1px 0 var(--glass-hi);
 }
-[data-role='omp-usage.details'] .oud-window + .oud-window {
-	padding-top: 18px;
-	border-top: 1px solid var(--l1);
+/* a window running low is ringed in its tone */
+[data-role='omp-usage.details'] .oud-window.oud-low {
+	background-color: rgb(from var(--oud-tone) r g b / 5%);
+	box-shadow:
+		0 0 0 1px rgb(from var(--oud-tone) r g b / 28%),
+		inset 0 1px 0 var(--glass-hi);
 }
 [data-role='omp-usage.details'] .oud-quota {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: baseline;
 	justify-content: space-between;
-	flex-wrap: wrap;
-	gap: 8px 18px;
+	gap: 4px 14px;
 }
 [data-role='omp-usage.details'] .oud-window-name {
-	font: 500 13px/20px var(--sans);
-	color: var(--t2);
+	min-width: 0;
+	font: 600 10px/14px var(--mono);
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--t3);
 	overflow-wrap: anywhere;
 }
 [data-role='omp-usage.details'] .oud-share {
-	font: 600 24px/30px var(--sans);
-	font-variant-numeric: tabular-nums;
-	color: var(--oud-tone);
+	display: flex;
+	align-items: baseline;
+	gap: 5px;
+	white-space: nowrap;
 }
+[data-role='omp-usage.details'] .oud-share-n {
+	font: 600 22px/26px var(--sans);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.01em;
+	color: rgb(from var(--oud-tone) r g b);
+}
+[data-role='omp-usage.details'] .oud-share-u {
+	font: 500 10.5px/14px var(--mono);
+	color: var(--t3);
+}
+/* the meter, drawn as the line draws its bars: from the provider's first color, faint, to its second, with a lit
+   tip where the window stands */
 [data-role='omp-usage.details'] .oud-track {
-	height: 4px;
-	border-radius: 999px;
-	background-color: var(--l2);
-	overflow: hidden;
+	height: 6px;
+	border-radius: 3px;
+	background-color: color-mix(in srgb, var(--t1) 10%, transparent);
 }
 [data-role='omp-usage.details'] .oud-fill {
 	width: var(--oud-share);
-	height: 4px;
-	border-radius: 999px;
-	background-image: linear-gradient(90deg, var(--oud-a), var(--oud-b));
+	height: 6px;
+	border-radius: 3px;
+	background-image: linear-gradient(90deg, rgb(from var(--oud-a) r g b / 40%), rgb(from var(--oud-b) r g b));
+	box-shadow: 4px 0 12px -3px rgb(from var(--oud-b) r g b / 75%);
 }
+[data-role='omp-usage.details'] .oud-notes {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+[data-role='omp-usage.details'] .oud-note {
+	font: 500 11px/16px var(--mono);
+	font-variant-numeric: tabular-nums;
+	color: var(--t3);
+	overflow-wrap: anywhere;
+}
+/* a saved reset, in its provider's color as on the line */
+[data-role='omp-usage.details'] .oud-lit {
+	color: rgb(from var(--oud-pa) r g b);
+}
+[data-role='omp-usage.details'] .oud-warning,
+[data-role='omp-usage.details'] .oud-error {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--warn);
+}
+[data-role='omp-usage.details'] .oud-error {
+	color: var(--bad);
+}
+[data-role='omp-usage.details'] .oud-warning::before,
+[data-role='omp-usage.details'] .oud-error::before {
+	content: "";
+	flex: none;
+	width: 6px;
+	height: 6px;
+	border-radius: 3px;
+	background-color: currentColor;
+	box-shadow: 0 0 8px currentColor;
+}
+/* what the source observed and estimates for the window, under a hairline */
 [data-role='omp-usage.details'] .oud-metrics {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 20px 32px;
-	padding-top: 8px;
+	gap: 10px 18px;
+	margin-top: 3px;
+	padding-top: 11px;
+	border-top: 1px solid var(--l1);
 }
 [data-role='omp-usage.details'] .oud-metric {
 	display: flex;
+	flex: 1 1 130px;
 	flex-direction: column;
-	gap: 5px;
-	flex: 1 1 220px;
+	gap: 3px;
 	min-width: 0;
 }
 [data-role='omp-usage.details'] .oud-label {
-	font: 400 12px/18px var(--sans);
-	color: var(--t3);
+	font: 600 9.5px/14px var(--mono);
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--t4);
 }
 [data-role='omp-usage.details'] .oud-value {
-	font: 600 23px/30px var(--sans);
+	font: 600 16px/22px var(--sans);
 	font-variant-numeric: tabular-nums;
 	color: var(--t1);
 	overflow-wrap: anywhere;
 }
 [data-role='omp-usage.details'] .oud-cost {
-	font: 400 12px/18px var(--sans);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 6px;
+	font: 500 10.5px/15px var(--mono);
 	font-variant-numeric: tabular-nums;
 	color: var(--t2);
 	overflow-wrap: anywhere;
 }
-[data-role='omp-usage.details'] .oud-note {
+[data-role='omp-usage.details'] .oud-cost-k {
+	color: var(--t4);
+}
+/* nothing to show: a quiet well, not a bare line */
+[data-role='omp-usage.details'] .oud-empty {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 16px 18px;
+	border-radius: 10px;
+	background-color: var(--well);
+	box-shadow: 0 0 0 1px var(--l1);
+}
+[data-role='omp-usage.details'] .oud-empty > .sf-icon {
+	flex: none;
+	margin-top: 1px;
+	color: var(--t3);
+}
+[data-role='omp-usage.details'] .oud-empty-t {
+	font: 600 12.5px/18px var(--sans);
+	color: var(--t1);
+}
+[data-role='omp-usage.details'] .oud-empty-d {
 	font: 400 12px/18px var(--sans);
 	color: var(--t3);
-	overflow-wrap: anywhere;
 }
-[data-role='omp-usage.details'] .oud-warning { color: var(--warn); }
-[data-role='omp-usage.details'] .oud-error { color: var(--bad); }
 [data-role='omp-usage.details'] .oud-disclaimer {
-	padding-top: 16px;
+	padding: 12px 2px 0;
 	border-top: 1px solid var(--l1);
-	font: 400 11px/17px var(--sans);
+	font: 400 11px/16px var(--sans);
 	color: var(--t3);
 }
 [data-role='omp-usage.details-dock'] {
@@ -182,10 +308,16 @@ function M.color(kind: string?): string
 	return if kind == "stale" then "var(--oc-warn)" elseif kind == "error" then "var(--bad)" else "var(--oc-soft)"
 end
 
-local function note(row: Row): Node
+-- `lit`: the account's provider color; a row in it (a saved reset) keeps it.
+local function note(row: Row, lit: string?): Node
 	local class = "oud-note"
-	if row.kind == "stale" or row.color == "var(--oc-warn)" then class ..= " oud-warning" end
-	if row.kind == "error" then class ..= " oud-error" end
+	if row.kind == "stale" or row.color == "var(--oc-warn)" then
+		class ..= " oud-warning"
+	elseif row.kind == "error" then
+		class ..= " oud-error"
+	elseif lit and row.color == lit then
+		class ..= " oud-lit"
+	end
 	return ui.el("div", { class = class, text = string.gsub(row.text, "^%s+", "") })
 end
 
@@ -196,15 +328,32 @@ local function metric(label: string, values: Amounts): Node?
 		table.insert(children, ui.el("span", { class = "oud-value", text = values.tokens }))
 	end
 	if values.cost then
-		table.insert(children, ui.el("span", {
-			class = if values.tokens then "oud-cost" else "oud-value",
-			text = if values.tokens then "API-equivalent · " .. values.cost else values.cost,
-		}))
-		if values.tokens == nil then
-			table.insert(children, ui.el("span", { class = "oud-cost", text = "API-equivalent value" }))
+		if values.tokens then
+			table.insert(children, ui.el("span", { class = "oud-cost" }, {
+				ui.el("span", { text = values.cost }),
+				ui.el("span", { class = "oud-cost-k", text = "API-equivalent" }),
+			}))
+		else
+			table.insert(children, ui.el("span", { class = "oud-value", text = values.cost }))
+			table.insert(children, ui.el("span", { class = "oud-cost oud-cost-k", text = "API-equivalent value" }))
 		end
 	end
 	return ui.el("div", { class = "oud-metric" }, children)
+end
+
+-- An account's provider color: the first a provider's palette gives among its rows (its heading's, a saved
+-- reset's, a window's while its share is fine), as the line paints it.
+local function account_color(account: Account): string?
+	local candidates: { string? } = {}
+	for _, window in account.windows do
+		for _, row in window.notes do table.insert(candidates, row.color) end
+		table.insert(candidates, window.row.a)
+	end
+	for _, row in account.notes do table.insert(candidates, row.color) end
+	for _, color in candidates do
+		if color and string.match(color, "^var%(%-%-ou%-g%d+%-a%)$") then return color end
+	end
+	return nil
 end
 
 -- Rows already follow the selected account/window scope. Only a window-scoped typed value enters its
@@ -223,6 +372,7 @@ local function accounts_of(rows: { Row }): { Account }
 				current = { title = row.text, windows = {}, notes = {} }
 				table.insert(accounts, current)
 			end
+			current.color = row.color
 			window = nil
 		elseif row.right ~= nil and row.share ~= nil then
 			window = { row = row, notes = {}, used = {}, estimated = {} }
@@ -251,7 +401,7 @@ end
 local function view(rows: { Row }): (Node, string)
 	local children: { Node } = {}
 	local rules: { string } = {}
-	local accounts = accounts_of(rows)
+	local accounts: { Account } = if #rows > 1 then accounts_of(rows) else {}
 	local estimated, has_cost = false, false
 	local window_index = 0
 	local title = if rows[1] then rows[1].text else "Usage"
@@ -260,22 +410,35 @@ local function view(rows: { Row }): (Node, string)
 	end
 	for index, account in accounts do
 		local body: { Node } = {}
-		local heading = { ui.el("span", {
-			class = if #accounts == 1 and account.title == nil then "oud-title" else "oud-account-title",
-			text = account.title or title,
-		}) }
+		local lit = account_color(account)
+		local color = account.color or lit
+		if color then
+			table.insert(rules, string.format("%s [data-account='%d'] { --oud-pa: %s; --oud-pb: %s; }",
+				SELECTOR, index, color, (string.gsub(color, "^(var%(%-%-ou%-g%d+)%-a%)$", "%1-b)"))))
+		end
+		local heading = {
+			ui.el("span", { class = "oud-swatch" }),
+			ui.el("span", { class = "oud-account-title", text = account.title or title }),
+		}
 		local plan: string? = nil
 		local conflicting_plan = false
+		local stamp: Row? = nil
 		for _, row in account.notes do
 			if row.kind == "plan" and row.value and not row.shared then
 				if plan and plan ~= row.value then conflicting_plan = true end
 				plan = row.value
+			elseif row.kind == "observed" and row.value and not row.shared and stamp == nil then
+				stamp = row
 			end
 		end
 		if plan and not conflicting_plan then
 			table.insert(heading, ui.el("span", { class = "oud-plan", text = plan }))
 		end
+		if stamp then
+			table.insert(heading, ui.el("span", { class = "oud-stamp", text = string.gsub(stamp.text, "^%s+", "") }))
+		end
 		table.insert(body, ui.el("div", { class = "oud-heading" }, heading))
+		local wells: { Node } = {}
 		for _, window in account.windows do
 			window_index += 1
 			local row = window.row
@@ -284,16 +447,27 @@ local function view(rows: { Row }): (Node, string)
 				"%s [data-window='%s'] { --oud-share: %.4f%%; --oud-a: %s; --oud-b: %s; --oud-tone: %s; }",
 				SELECTOR, id, (row.share or 0) * 100, row.a or "var(--accent)", row.b or row.a or "var(--accent)", row.color
 			))
+			-- `64% left`: the share large, the word after it small
+			local share, unit = string.match(row.right or "", "^(%S+)%s+(.+)$")
+			-- a window the line paints `--warn` or `--bad`
+			local low = string.match(row.color, "%-warn%)$") ~= nil or string.match(row.color, "%-bad%)$") ~= nil
 			local content = {
 				ui.el("div", { class = "oud-quota" }, {
 					ui.el("span", { class = "oud-window-name", text = row.text }),
-					ui.el("span", { class = "oud-share", text = row.right }),
+					ui.el("span", { class = "oud-share" }, {
+						ui.el("span", { class = "oud-share-n", text = share or row.right }),
+						ui.el("span", { class = "oud-share-u", text = unit or "" }),
+					}),
 				}),
 				ui.el("div", { class = "oud-track", attrs = { role = "meter", ["aria-label"] = row.text .. " remaining", ["aria-valuenow"] = tostring((row.share or 0) * 100), ["aria-valuemin"] = "0", ["aria-valuemax"] = "100" } }, {
 					ui.el("div", { class = "oud-fill" }),
 				}),
 			}
-			for _, item in window.notes do table.insert(content, note(item)) end
+			if #window.notes > 0 then
+				local notes: { Node } = {}
+				for _, item in window.notes do table.insert(notes, note(item, lit)) end
+				table.insert(content, ui.el("div", { class = "oud-notes" }, notes))
+			end
 			local metrics: { Node } = {}
 			local observed = metric("Observed usage", window.used)
 			local remaining = metric("Estimated remaining", window.estimated)
@@ -301,17 +475,29 @@ local function view(rows: { Row }): (Node, string)
 			if remaining then table.insert(metrics, remaining); estimated = true end
 			has_cost = has_cost or window.used.cost ~= nil or window.estimated.cost ~= nil
 			if #metrics > 0 then table.insert(content, ui.el("div", { class = "oud-metrics" }, metrics)) end
-			table.insert(body, ui.el("div", { class = "oud-window", attrs = { ["data-window"] = id } }, content))
+			table.insert(wells, ui.el("div", {
+				class = if low then "oud-window oud-low" else "oud-window",
+				attrs = { ["data-window"] = id },
+			}, content))
 		end
+		if #wells > 0 then table.insert(body, ui.el("div", { class = "oud-windows" }, wells)) end
+		local notes: { Node } = {}
 		for _, row in account.notes do
-			if not (plan and not conflicting_plan and row.kind == "plan" and row.value == plan and not row.shared) then
-				table.insert(body, note(row))
+			if not (plan and not conflicting_plan and row.kind == "plan" and row.value == plan and not row.shared) and row ~= stamp then
+				table.insert(notes, note(row, lit))
 			end
 		end
-		table.insert(children, ui.el("section", { class = "oud-account", key = "account-" .. tostring(index) }, body))
+		if #notes > 0 then table.insert(body, ui.el("div", { class = "oud-notes" }, notes)) end
+		table.insert(children, ui.el("section", { class = "oud-account", key = "account-" .. tostring(index), attrs = { ["data-account"] = tostring(index) } }, body))
 	end
 	if #rows <= 1 then
-		table.insert(children, ui.el("div", { class = "oud-note", text = "No quota data for this view. Choose a provider in Settings, or focus an omp pane with a quota source." }))
+		table.insert(children, ui.el("div", { class = "oud-empty" }, {
+			ui.node("icon", { name = "gauge" }),
+			ui.el("div", {}, {
+				ui.el("div", { class = "oud-empty-t", text = "No quota data for this view" }),
+				ui.el("div", { class = "oud-empty-d", text = "Choose a provider in Settings, or focus an omp pane with a quota source." }),
+			}),
+		}))
 	end
 	if estimated or has_cost then
 		local text = if estimated then "Estimates assume the same workload mix; they are not official token allowances." else ""

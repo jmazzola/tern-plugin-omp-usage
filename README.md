@@ -282,11 +282,14 @@ token capacity. Plan and observation time remain visible. Normal estimates use n
 and red remain reserved for low quotas, stale observations and errors. Plan ids read as names
 (`pro-20x` shows as `Pro 20x`); a plan the source already capitalizes stays as reported.
 
-Real Keeper quota-cache replay in Tern's Titanium dark theme (a real window, enlarged to 2×):
+The details for omp's own Claude and Codex reports, in Tern's Titanium dark theme: a box per window with its share,
+bar, saved resets and reset time, side by side while they fit. A CPA or Keeper source adds the plan as a chip
+beside the account, its observation time, and **Observed usage** / **Estimated remaining** under each window's
+bar:
 
-<img src="docs/images/card-summary.png" alt="Native Tern quota details: Codex@dashboard usage with a Pro 20x plan badge, a rounded weekly quota bar at 71% left, its saved reset and reset time, observed usage of 258.57M tokens and estimated remaining 633.04M tokens with their API-equivalent values, the observation time and the estimate disclaimer" width="714">
+<img src="docs/images/card-summary.png" alt="Native Tern quota details: a USAGE label, then Claude with its swatch over a hairline and two boxes side by side, Weekly window 93% left with a saved reset in Claude's color and its reset time, and Fable weekly window 87% left; then Codex with one Weekly window box at 98% left, three saved resets and its reset time" width="794">
 
-The same source's hover summary: under the weekly bar, the estimated tokens left (`633.04M`) and their
+A Keeper source's hover summary: under the weekly bar, the estimated tokens left (`633.04M`) and their
 API-equivalent value (`$533.10`), each after its icon, and the plan as a pill on the title row:
 
 <img src="docs/images/hover-summary.png" alt="Quota hover summary over the usage line: Codex@dashboard usage with a gold Pro 20x pill, the weekly window at 71% left, under its bar a tokens icon with 633.04M and a dollar icon with $533.10, then one saved reset, the reset time and a last row naming the details and settings shortcuts" width="348">
