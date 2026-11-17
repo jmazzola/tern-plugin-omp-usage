@@ -278,7 +278,11 @@ local function prepare(cx: WindowCx, fetch: boolean, done: (Source?, Failure?, W
 	-- have to bring first (a copy installed after the mirror last fetched).
 	local function resolve(at: WindowCx, fetched: boolean)
 		local function by_version(at0: WindowCx)
-			local args = { "log", "-p", "-U0", "--no-color", "--format=%x1e%H", MIRROR_TIP, "--", "plugin.toml" }
+			-- along the branch's first parents, a merge diffed against its first parent: git shows no diff for a
+			-- merge otherwise, so a version set in one (a pull request merged with a version bump) would never be
+			-- found, and `<sha>^` below steps back along the same line
+			local args =
+				{ "log", "-m", "--first-parent", "-p", "-U0", "--no-color", "--format=%x1e%H", MIRROR_TIP, "--", "plugin.toml" }
 			git(at0, MIRROR, args, 20000, function(log: Git, at1: WindowCx)
 				local commits = version_commits(log.out)
 				local found: number? = nil
@@ -993,7 +997,10 @@ function M.check(cx: WindowCx, manual: boolean)
 		kv_set(KV_LAST, os.time())
 		git(cx1, src.dir, { "rev-parse", "--short", src.head }, 10000, function(rev: Git, cx3: WindowCx)
 			local head = trim(rev.out)
-			git(cx3, src.dir, { "rev-list", "--left-right", "--count", src.head .. "..." .. src.tip }, 10000, function(count: Git, cx4: WindowCx)
+			-- Counts, and below lists, follow the main line's first parents: a merge stands for the commits it brings
+			-- in (its message says what they change), so a merged branch's own commits aren't offered one by one.
+			local divergence = { "rev-list", "--first-parent", "--left-right", "--count", src.head .. "..." .. src.tip }
+			git(cx3, src.dir, divergence, 10000, function(count: Git, cx4: WindowCx)
 				local ahead_text, behind_text = string.match(count.out, "^%s*(%d+)%s+(%d+)")
 				local ahead, behind = tonumber(ahead_text or ""), tonumber(behind_text or "")
 				if not rev.ok or not count.ok or ahead == nil or behind == nil then
@@ -1026,7 +1033,7 @@ function M.check(cx: WindowCx, manual: boolean)
 				-- the README alone offers nothing. It comes along with the next real update, which goes to the
 				-- upstream's tip.
 				local paths = PLUGIN_PATHS
-				local count_args = { "rev-list", "--count", src.head .. ".." .. src.tip }
+				local count_args = { "rev-list", "--first-parent", "--count", src.head .. ".." .. src.tip }
 				for _, path in paths do
 					table.insert(count_args, path)
 				end
@@ -1051,6 +1058,7 @@ function M.check(cx: WindowCx, manual: boolean)
 					end
 					local log_args = {
 						"log",
+						"--first-parent",
 						"-n",
 						tostring(CARD_COMMITS),
 						"--format=%H%x1f%h%x1f%cr%x1f%an%x1f%s%x1f%b%x1e",
