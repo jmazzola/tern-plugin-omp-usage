@@ -74,43 +74,29 @@ local LABEL_IDS: { [string]: string } = {
 	Factory = "factory-droid",
 }
 -- A provider's colors: `a` for its label and the start of its bars, `b` (else `a`) for where they end, their
--- tips and its comets. Each is a shade per theme, so it reads on light and dark alike.
+-- tips and its comets. Each is a shade per theme, so it reads on light and dark alike. They follow each brand as
+-- its own site, logo and style sheets show it (checked 2026-11-17), so brands that share a color look alike here
+-- too: Gemini and Antigravity are both Google's #3186ff, and only how their bars end tells them apart.
 export type Palette = { name: string, a: string, b: string? }
 local PRESETS: { [string]: Palette } = {
-	anthropic = { name = "Clay", a = "light-dark(#c15f3c, #d97757)" },
-	["openai-codex"] = {
-		name = "Graphite to blue",
-		a = "light-dark(#6b7785, #9aa7b4)",
-		b = "light-dark(#3366d6, #6f9cff)",
-	},
-	openai = { name = "OpenAI green", a = "light-dark(#0d8a6a, #10a37f)" },
-	["kimi-code"] = { name = "Kimi green", a = "light-dark(#3a8a2c, #7dd256)" },
-	["google-gemini-cli"] = {
-		name = "Blue to white",
-		a = "light-dark(#1a66d9, #4f8ff7)",
-		b = "light-dark(#7f9fd6, #f4f7ff)",
-	},
-	["google-antigravity"] = {
-		name = "Green to blue",
-		a = "light-dark(#15803d, #4ade80)",
-		b = "light-dark(#1d4ed8, #60a5fa)",
-	},
-	["minimax-code"] = {
-		name = "Red to pink",
-		a = "light-dark(#d23f57, #f2576f)",
-		b = "light-dark(#c2428e, #ff80c5)",
-	},
-	["opencode-go"] = { name = "Go cyan", a = "light-dark(#0a8aa1, #2ccde6)" },
-	["alibaba-token-plan"] = { name = "Qwen purple", a = "light-dark(#6c4fd0, #a088ff)" },
-	devin = { name = "Teal to white", a = "light-dark(#0e8c80, #34c8b6)", b = "light-dark(#134e4a, #ecfeff)" },
+	anthropic = { name = "Clay", a = "light-dark(#c6613f, #d97757)" },
+	["openai-codex"] = { name = "Ultramarine", a = "light-dark(#3a35ff, #808cff)", b = "light-dark(#6987ff, #576dff)" },
+	openai = { name = "Monochrome", a = "light-dark(#000000, #ffffff)" },
+	["kimi-code"] = { name = "Kimi blue", a = "light-dark(#1170e8, #1a88ff)" },
+	["google-gemini-cli"] = { name = "Aurora", a = "light-dark(#0b57d0, #3186ff)", b = "light-dark(#4c96ff, #e7f1ff)" },
+	["google-antigravity"] = { name = "Arch", a = "light-dark(#3279f9, #3186ff)", b = "#00b95c" },
+	["minimax-code"] = { name = "Magenta to coral", a = "light-dark(#e21680, #ff276f)", b = "light-dark(#ff643b, #ff7038)" },
+	["opencode-go"] = { name = "Go steel", a = "light-dark(#4e81b1, #6c99c6)" },
+	["alibaba-token-plan"] = { name = "Qwen blue", a = "light-dark(#082dff, #5c74ff)" },
+	devin = { name = "Blue to ink", a = "light-dark(#317cff, #49b0ff)", b = "light-dark(#191919, #fcfcfc)" },
 	xai = { name = "Grok mono", a = "light-dark(#52525b, #a1a1aa)", b = "light-dark(#18181b, #fafafa)" },
-	["muse-code"] = { name = "Pink to blue", a = "light-dark(#be185d, #f472b6)", b = "light-dark(#1d5fd6, #5b9bff)" },
-	["github-copilot"] = { name = "Purple to cyan", a = "light-dark(#7c3aed, #b083f0)", b = "light-dark(#0e7490, #22d3ee)" },
-	cursor = { name = "White to green", a = "light-dark(#27272a, #e4e4e7)", b = "light-dark(#047857, #34d399)" },
-	zai = { name = "Indigo to teal", a = "light-dark(#4338ca, #818cf8)", b = "light-dark(#0f766e, #2dd4bf)" },
-	["zai-coding-plan"] = { name = "Indigo to teal", a = "light-dark(#4338ca, #818cf8)", b = "light-dark(#0f766e, #2dd4bf)" },
-	["factory-droid"] = { name = "Orange to violet", a = "light-dark(#c2410c, #fb923c)", b = "light-dark(#6d28d9, #a78bfa)" },
-	synthetic = { name = "Violet to white", a = "light-dark(#7e22ce, #c084fc)", b = "light-dark(#581c87, #faf5ff)" },
+	["muse-code"] = { name = "Meta blue", a = "light-dark(#0064e0, #0082fb)", b = "light-dark(#0082fb, #9bcbff)" },
+	["github-copilot"] = { name = "Lilac to green", a = "light-dark(#8250df, #c898fd)", b = "light-dark(#08872b, #23ea57)" },
+	cursor = { name = "Ink to orange", a = "light-dark(#26251e, #edecec)", b = "#f54e00" },
+	zai = { name = "Ink to silver", a = "light-dark(#141618, #f4f6f8)", b = "light-dark(#8d8e99, #a0a5b3)" },
+	["zai-coding-plan"] = { name = "Ink to silver", a = "light-dark(#141618, #f4f6f8)", b = "light-dark(#8d8e99, #a0a5b3)" },
+	["factory-droid"] = { name = "Orange to ink", a = "light-dark(#d15010, #ef6f2e)", b = "light-dark(#020202, #eeeeee)" },
+	synthetic = { name = "Indigo to emerald", a = "light-dark(#625fff, #7d87ff)", b = "light-dark(#009767, #00bb7f)" },
 }
 local ACCENT: Palette = { name = "Theme accent", a = "var(--accent)" }
 -- The alternatives the settings offer for any provider.
