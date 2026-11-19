@@ -21,6 +21,8 @@ local KV_CARD_ROWS = data.KV_CARD_ROWS
 local CARD_ROWS = data.CARD_ROWS
 local KV_BACKDROP = data.KV_BACKDROP
 local BACKDROPS = data.BACKDROPS
+local KV_USAGE_OPENS = data.KV_USAGE_OPENS
+local USAGE_OPENS = data.USAGE_OPENS
 local COMBINED = data.COMBINED
 local COMBINED_PLANS = data.COMBINED_PLANS
 local now_ms = data.now_ms
@@ -1561,6 +1563,31 @@ local function update_status(): (string, string?)
 	return name .. " is up to date", "Checked " .. span(math.max(0, os.time() - last) * 1000) .. " ago"
 end
 
+-- What `usage` in the widget bar opens (see data.luau's USAGE_OPENS).
+function build.widget_bar(settings: Settings): Node
+	local pills: { Node } = {}
+	local note = ""
+	for _, choice in USAGE_OPENS do
+		local on = choice.id == settings.usage_opens
+		if on then
+			note = choice.label .. ": " .. choice.detail .. "."
+		end
+		table.insert(pills, ui.el("button", {
+			class = "oup-pill",
+			text = choice.label,
+			actions = { click = "usage-opens=" .. choice.id },
+			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+		}))
+	end
+	return section("widget-bar", "Widget bar", "usage shows in its Plugin segments widget (palette › Edit widgets…) while an omp pane has focus", {
+		ui.el("div", { class = "oup-urow oup-limit" }, {
+			ui.el("span", { class = "oup-ulabel", text = "usage opens" }),
+			ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "What usage in the widget bar opens" } }, pills),
+			ui.el("span", { class = "oup-note", text = note }),
+		}),
+	})
+end
+
 function build.updates(): Node
 	local current = update.interval()
 	local pills: { Node } = {}
@@ -1644,6 +1671,7 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		details_shortcut() or "",
 		tostring(settings.card_rows),
 		settings.backdrop,
+		settings.usage_opens,
 		update.interval().id,
 		(function(): string
 			local title, sub = update_status()
@@ -1698,6 +1726,7 @@ local function panel_parts(state: PanelState): (Node, Node, string)
 		build.show(state.settings, state.providers),
 		build.providers(state.settings, state.providers),
 		build.colors(state.settings, state.providers, rules),
+		build.widget_bar(state.settings),
 		build.updates(),
 	})
 	return view, panel_dock(state.keys), table.concat(rules, "\n")
@@ -1906,6 +1935,15 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 			return false
 		end
 		toggle_plan(id, name)
+	elseif act == "usage-opens" then
+		local known = false
+		for _, choice in USAGE_OPENS do
+			known = known or choice.id == value
+		end
+		if not known then
+			return false
+		end
+		store.set(KV_USAGE_OPENS, value)
 	elseif act == "backdrop" then
 		local known = false
 		for _, choice in BACKDROPS do

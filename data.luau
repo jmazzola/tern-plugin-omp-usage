@@ -142,6 +142,13 @@ local BACKDROPS: { { id: string, label: string, detail: string } } = {
 	{ id = "clear", label = "Clear", detail = "nothing: the line over whatever is behind it" },
 }
 local BACKDROP_DEFAULT = "glass"
+-- What `usage` in the widget bar's Plugin segments opens (see window.luau's STATUS). The settings panel unless set.
+local KV_USAGE_OPENS = "omp-usage.usage-opens"
+local USAGE_OPENS: { { id: string, label: string, detail: string } } = {
+	{ id = "panel", label = "Settings panel", detail = "every setting; its bottom bar opens the quota details" },
+	{ id = "details", label = "Quota details", detail = "every account and window in full" },
+}
+local USAGE_OPENS_DEFAULT = "panel"
 -- In KV_ACCOUNT, in place of an account's name: show the provider's accounts combined, all in one set of windows
 -- (COMBINED), or a set per plan (COMBINED_PLANS: the plan each account reports, else the accounts that report the
 -- same windows); each window's share their average (see `combined`).
@@ -200,6 +207,7 @@ export type Settings = {
 	plan_hidden: { [string]: { string } },
 	card_rows: number,
 	backdrop: string,
+	usage_opens: string,
 }
 
 -- The cache file as last read, its parse, and the last providers it listed (see `read_cache`).
@@ -711,6 +719,17 @@ local store = {
 	end,
 }
 
+-- The USAGE_OPENS id set, else the default. Read on its own by every poll (window.luau), panel or not.
+local function usage_opens(): string
+	local opens = store.get(KV_USAGE_OPENS)
+	for _, choice in USAGE_OPENS do
+		if opens == choice.id then
+			return choice.id
+		end
+	end
+	return USAGE_OPENS_DEFAULT
+end
+
 -- A stored list of ids, each once.
 local function id_list(value: any): { string }
 	local list: { string } = {}
@@ -737,6 +756,7 @@ local function load_settings(): Settings
 		plan_hidden = {},
 		card_rows = CARD_ROWS_DEFAULT,
 		backdrop = BACKDROP_DEFAULT,
+		usage_opens = usage_opens(),
 	}
 	local mode = store.get(KV_MODE)
 	if mode == "all" or mode == "selected" then
@@ -1575,6 +1595,9 @@ return {
 	CARD_ROWS = CARD_ROWS,
 	KV_BACKDROP = KV_BACKDROP,
 	BACKDROPS = BACKDROPS,
+	KV_USAGE_OPENS = KV_USAGE_OPENS,
+	USAGE_OPENS = USAGE_OPENS,
+	usage_opens = usage_opens,
 	COMBINED = COMBINED,
 	COMBINED_PLANS = COMBINED_PLANS,
 	now_ms = now_ms,

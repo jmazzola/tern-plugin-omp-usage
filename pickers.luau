@@ -177,6 +177,13 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 		end
 	end
 	table.insert(items, { label = "Line background…", detail = backdrop .. "; keeps the line readable over the chat", group = "Card", pick = "backdrop" })
+	local opens = data.USAGE_OPENS[1].label
+	for _, choice in data.USAGE_OPENS do
+		if choice.id == settings.usage_opens then
+			opens = choice.label
+		end
+	end
+	table.insert(items, { label = "usage in the widget bar…", detail = "opens the " .. string.lower(opens), group = "Widget bar", pick = "usage-opens" })
 	table.insert(items, { label = "Check for updates…", detail = "fetch the plugin's repository and offer what's new", group = "Updates", icon = "download", pick = "update" })
 	local every = update.interval()
 	table.insert(items, {
@@ -418,6 +425,22 @@ local function open_plans(cx: WindowCx)
 			local cx2 = next_cx or cx
 			after_change(cx2)
 			open_plans(cx2)
+		end)
+end
+
+-- What `usage` in the widget bar opens.
+local function open_usage_opens(cx: WindowCx)
+	local current = load_settings().usage_opens
+	local items: { PickItem } = {}
+	for _, choice in data.USAGE_OPENS do
+		table.insert(items, { label = choice.label, detail = choice.detail, current = choice.id == current, opens = choice.id })
+	end
+	cx:pick({ items = items, placeholder = "What does usage in the widget bar open?", icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item then
+				store.set(data.KV_USAGE_OPENS, (item :: any).opens)
+				after_change(next_cx or cx)
+			end
 		end)
 end
 
@@ -751,6 +774,7 @@ return {
 	toggle_account = toggle_account,
 	toggle_plan = toggle_plan,
 	open_plans = open_plans,
+	open_usage_opens = open_usage_opens,
 	move_account = move_account,
 	after_change = after_change,
 	prompt_color = prompt_color,

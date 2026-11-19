@@ -1480,6 +1480,7 @@ return {
 	hide_css = hide_css,
 	install = install,
 	PANEL_KEYS = PANEL_KEYS,
+	PANEL_ACTION = PANEL_ACTION,
 	DETAILS_ACTION = DETAILS_ACTION,
 	shortcut = shortcut,
 	settings_hint = settings_hint,

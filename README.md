@@ -163,8 +163,7 @@ shortcuts, or `usage` in the widget bar.
 Every account and window in full, in a view of its own, with no row limit. Open it with:
 
 - Alt+Shift+U (rebind `plugin.omp-usage.details`)
-- `usage` in the widget bar. Tern only shows plugin segments in its **Plugin segments** widget, which you have to place
-  yourself (palette › **Edit widgets…**), and `usage` shows there while an omp pane has focus.
+- `usage` in the widget bar, if you set it to open the quota details (see [Settings](#settings))
 - **Quota details** at the end of the settings panel's bottom bar
 - **omp Usage: Quota details** in the palette
 
@@ -188,8 +187,16 @@ were observed, notes call out a stale or failing source, and windows Keeper has 
 
 ## Settings
 
-Open the panel with Ctrl+Alt+U (rebind `plugin.omp-usage.panel`), **Settings** in the quota details, or **omp Usage:
-Settings panel** in the palette. Changes apply right away, in every window.
+Open the panel with:
+
+- Ctrl+Alt+U (rebind `plugin.omp-usage.panel`)
+- `usage` in the widget bar, unless you set it to open the quota details instead (**Widget bar** below). Tern only
+  shows plugin segments in its **Plugin segments** widget, which you have to place yourself (palette › **Edit
+  widgets…**), and `usage` shows there while an omp pane has focus.
+- **Settings** in the quota details
+- **omp Usage: Settings panel** in the palette
+
+Changes apply right away, in every window.
 
 | Section | What it does |
 | --- | --- |
@@ -197,6 +204,7 @@ Settings panel** in the palette. Changes apply right away, in every window.
 | Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers**. When there's no quota data for them, the line falls back to the focused session's own status |
 | Providers | Pick a row up by its grip, then click where it goes. Click a window to hide or show it everywhere. The switch adds the provider to Selected. A provider or account whose plan is known shows it as a gold pill beside its switch: click the pill to leave that plan out of the card and the quota details (it fades and is struck through), again to show it. With several accounts, each one gets its own row: grip, name (click it to show only that account, again for all), windows, plan, and a switch that takes it off the line, the card and the quota details. A chip next to the provider says what's showing, with a button for the next option: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 2 Max, 4 Pro, 4 Ultra ✕` (or `by plan · 6 with 5H, 4 without ✕`) with **all in one**, or `only dev.ops ✕`. Grouped by windows, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`). A custom color that's nearly white gets a darker shade in the light theme, and one that's nearly black a lighter one in the dark theme, so it never vanishes into the card |
+| Widget bar | What `usage` in the widget bar opens: **Settings panel** (default) or **Quota details** |
 | Updates | Status, **Check for Updates** or **Download Update**, and how often to check (see [Update](#update)) |
 
 External quota sources are set up in a file, not the panel (see [External quota sources](#external-quota-sources)).

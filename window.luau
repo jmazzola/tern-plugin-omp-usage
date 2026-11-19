@@ -91,6 +91,7 @@ local sheet = render.sheet
 local hide_css = render.hide_css
 local install = render.install
 local PANEL_KEYS = render.PANEL_KEYS
+local PANEL_ACTION = render.PANEL_ACTION
 local DETAILS_ACTION = render.DETAILS_ACTION
 local shortcut = render.shortcut
 local settings_hint = render.settings_hint
@@ -117,8 +118,8 @@ local pulse_seq = 0
 -- panel's preview of the line and the details are drawn from.
 local sync_details: (cx: WindowCx, open: boolean, settings: Settings?, cache: Cache?) -> ()
 local last_dock: Dock? = nil
-
 local refresh: (cx: WindowCx) -> ()
+local sync_status: () -> ()
 -- What the installed sheet was built from (see `show_pane`).
 local sheet_key: string? = nil
 
@@ -191,6 +192,7 @@ end
 -- and is drawn on the agent pane beside the panel when that is its tab's only one (see `line_pane`).
 -- Then redraws the panel if what it shows changed.
 refresh = function(cx: WindowCx)
+	sync_status()
 	local target: number? = nil
 	local scope = FOCUSED_PANE
 	local pane = cx.session:focused()
@@ -257,8 +259,8 @@ end)
 tern.timer(300, tick)
 
 -- Settings, two ways: the panel (a canvas beside the focused pane: `omp Usage: Settings panel`,
--- Ctrl+Alt+U) and pickers (`omp Usage: Settings…`). Native quota details open from `usage` (Plugin segments),
--- Shift+Alt+U or `omp Usage: Quota details`.
+-- Ctrl+Alt+U) and pickers (`omp Usage: Settings…`). Native quota details open from Shift+Alt+U,
+-- `omp Usage: Quota details` or the panel's bottom bar. `usage` in Plugin segments opens either, as set.
 -- Both settings views store choices in `tern.kv` and redraw the line at once.
 
 -- The details canvas follows the same selected sources and last agent as the preview. Its scrollable body
@@ -343,6 +345,8 @@ local function open_menu(cx: WindowCx)
 							after_change(last_cx or cx2)
 						end
 					end)
+			elseif choice.pick == "usage-opens" then
+				pickers.open_usage_opens(cx2)
 			elseif choice.pick == "backdrop" then
 				local items: { PickItem } = {}
 				for _, option in data.BACKDROPS do
@@ -395,9 +399,23 @@ tern.command({
 	end,
 })
 
--- `usage` in the widget bar's Plugin segments opens the read-only native details.
+-- `usage` in the widget bar's Plugin segments opens the settings panel or the quota details, as set (see data.luau's
+-- USAGE_OPENS). Segments must be pure and fast, so it reads what `sync_status` last saw rather than `tern.kv`.
 -- While an update is waiting, Update omp Usage (update.luau) stays first.
-local STATUS: { StatusSegment } = { { text = "usage", icon = "gauge", command = DETAILS_ACTION } }
+local function usage_segment(opens: string): { StatusSegment }
+	return { { text = "usage", icon = "gauge", command = if opens == "details" then DETAILS_ACTION else PANEL_ACTION } }
+end
+local status_opens = data.usage_opens()
+local STATUS = usage_segment(status_opens)
+
+sync_status = function()
+	local opens = data.usage_opens()
+	if opens ~= status_opens then
+		status_opens = opens
+		STATUS = usage_segment(opens)
+		pcall(tern.chrome.refresh)
+	end
+end
 
 tern.chrome.status(function(pane: StatusPaneInfo): { StatusSegment }?
 	local pending = update.status_segment()
