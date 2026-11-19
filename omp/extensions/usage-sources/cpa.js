@@ -9,7 +9,7 @@
 // it, when there is one. Read-only: nothing is reset, consumed, uploaded,
 // edited or deleted, and credential files are never downloaded (CPA itself may
 // renew an expiring token to fill in `$TOKEN$`).
-import { HttpError, codexTier, durationMs, finite, mapConcurrent, normalizeProvider, request, timestamp } from "./common.js";
+import { GOOGLE_TIER_PLANS, HttpError, codexTier, durationMs, finite, mapConcurrent, normalizeProvider, request, timestamp } from "./common.js";
 import { claudeResetCredits } from "./reset-credits.js";
 
 const HOUR = 3_600_000;
@@ -59,13 +59,6 @@ const XAI_HEADERS = {
   Accept: "*/*",
   "User-Agent": `grok-pager/${XAI_VERSION} grok-shell/${XAI_VERSION} (macos; aarch64)`,
 };
-// Google Code Assist tier ids as CPA Management Center names their plans.
-const GOOGLE_TIER_PLANS = new Map([
-  ["free-tier", "free"],
-  ["g1-pro-tier", "pro"],
-  ["g1-ultra-lite-tier", "ultra-lite"],
-  ["g1-ultra-tier", "ultra"],
-]);
 // Claude's usage windows. The 5h and 7d windows fall back to the `limits[]`
 // entries of kind session and weekly_all. Model families (legacy Opus and
 // Sonnet buckets, now weekly_scoped entries such as Fable), OAuth apps and

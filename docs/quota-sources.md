@@ -140,7 +140,9 @@ poll. Freshness always goes by Keeper's `refreshed_at`, never by when omp Usage 
 | Provider and plugin summaries | Labeled, with units, in the details. No made-up percentage without a limit to divide by |
 | Request history and billing | Not here. Use CPA's or Keeper's own pages. omp Usage collects no history and makes no extra requests |
 
-Plan ids read as names (`pro-20x` shows as `Pro 20x`). A plan the source already capitalizes stays as it is.
+Plan ids read as names (`team-business` shows as `Team Business`). A plan the source already capitalizes stays as it
+is. Plans sold under another name today read as sold: Codex's `prolite`, `pro` and `promax` as Pro 100, Pro 200 and
+Pro 500, and Claude's `Max 5x` and `Max 20x` as Max and Ultra.
 
 Estimates assume you keep using the account the same way you have been. Different models, cache rates, quota
 weights, requests Keeper missed and rounded shares all make them less accurate, and with no usage or a share used of

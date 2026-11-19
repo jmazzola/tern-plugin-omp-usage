@@ -1,4 +1,4 @@
-import { finite } from "./common.js";
+import { GOOGLE_TIER_PLANS, finite, normalizeProvider } from "./common.js";
 
 // Keep server text on one UI row and out of the status-line separator grammar.
 export function cleanText(value) {
@@ -81,12 +81,52 @@ export function limitDetails(limit, { estimates = true, includeShare = false } =
   return rows;
 }
 
+// Plans as the providers sell them today, by provider and by the plan as reported (lowercase, words joined by single
+// spaces, a Codex `chatgpt_` prefix dropped). OpenAI reports Codex's three Pro tiers as `prolite`, `pro` and
+// `promax`. omp names Claude's Max plans by their old usage multiples (`Max 5x`, `Max 20x`, from the account's
+// rate-limit tier); Anthropic now sells them as Max and Ultra.
+const PLAN_NAMES = {
+  "openai-codex": {
+    prolite: "Pro 100",
+    "pro lite": "Pro 100",
+    pro: "Pro 200",
+    promax: "Pro 500",
+    "pro max": "Pro 500",
+    edu: "Education",
+  },
+  anthropic: { "max 5x": "Max", "max 20x": "Ultra" },
+};
+
 // Sources report plan ids (`pro-20x`, `plus`); they read as plan names (`Pro 20x`). A name the source already
-// cased (`Team Plan`) stays as reported.
-function planLabel(value) {
-  const plan = cleanText(value);
+// cased (`Team Plan`) stays as reported, without the provider's own name in front (Kiro's `Kiro Pro` reads `Pro`).
+// The plans PLAN_NAMES knows read as sold.
+function planLabel(value, provider) {
+  const words = cleanText(value).split(" ");
+  const own = String(provider ?? "").toLowerCase().split(/[-_@\s]+/).filter(Boolean);
+  let drop = 0;
+  while (drop < own.length && drop < words.length - 1 && words[drop].toLowerCase() === own[drop]) drop++;
+  const plan = words.slice(drop).join(" ");
+  const key = plan.toLowerCase().replace(/[-_\s]+/g, " ").replace(/^chatgpt /, "");
+  const known = PLAN_NAMES[normalizeProvider(provider)]?.[key];
+  if (known) return known;
   if (plan !== plan.toLowerCase()) return plan;
   return plan.split(/[-_\s]+/).filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join(" ");
+}
+
+// The plan a report names for its account, undefined when it names none: a quota source's `plan`, else where
+// omp's own reports carry it (as `omp usage` reads them): Claude's `subscriptionPlan` (omp 19+), the `planType` of
+// Codex, Z.ai, Kiro and others, Copilot's `plan`, Gemini CLI's tier and Muse Code's `tier`.
+export function planOf(report) {
+  const md = report?.metadata ?? {};
+  const gemini = GOOGLE_TIER_PLANS.get(md.currentTierId) ?? md.currentTierName;
+  const raw = [md.plan, md.subscriptionPlan, md.planType, gemini, md.tier].find((v) => typeof v === "string" && cleanText(v));
+  return raw === undefined ? undefined : planLabel(raw, md.baseProvider ?? report.provider) || undefined;
+}
+
+// The detail row naming a report's plan; undefined without one.
+export function planRow(report) {
+  const plan = planOf(report);
+  return plan ? { text: `Plan: ${plan}`, kind: "plan", valueText: plan } : undefined;
 }
 
 export function reportNotes(report) {
@@ -99,10 +139,8 @@ export function reportNotes(report) {
     rows.push({ text, kind: "stale" });
   }
   if (report.error) rows.push({ text: cleanText(report.error), kind: "error" });
-  if (report.metadata?.plan) {
-    const plan = planLabel(report.metadata.plan);
-    rows.push({ text: `Plan: ${plan}`, kind: "plan", valueText: plan });
-  }
+  const plan = planRow(report);
+  if (plan) rows.push(plan);
   for (const item of report.summary ?? []) {
     const label = cleanText(item.label);
     const value = typeof item.value === "string" ? cleanText(item.value) : item.currency ? money(item.value, item.currency) : quantity(item.value);

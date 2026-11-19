@@ -168,7 +168,15 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 			pick = "accounts",
 		})
 	end
+	table.insert(items, { label = "Plans…", detail = "which accounts' plans show in the card", group = "Providers", pick = "plans" })
 	table.insert(items, { label = "Card height…", detail = string.format("%d rows; past it, accounts sum up, then fold", settings.card_rows), group = "Card", pick = "card-rows" })
+	local backdrop = data.BACKDROPS[1].label
+	for _, choice in data.BACKDROPS do
+		if choice.id == settings.backdrop then
+			backdrop = choice.label
+		end
+	end
+	table.insert(items, { label = "Line background…", detail = backdrop .. "; keeps the line readable over the chat", group = "Card", pick = "backdrop" })
 	table.insert(items, { label = "Check for updates…", detail = "fetch the plugin's repository and offer what's new", group = "Updates", icon = "download", pick = "update" })
 	local every = update.interval()
 	table.insert(items, {
@@ -347,6 +355,15 @@ local function toggle_account(id: string, name: string)
 	end
 end
 
+-- Shows the plan of provider `id`'s account `name` ("" for a provider's single account) in the card and the quota
+-- details, or leaves it out.
+local function toggle_plan(id: string, name: string)
+	local settings = load_settings()
+	local list = toggled(settings.plan_hidden[id] or {}, name)
+	settings.plan_hidden[id] = if #list > 0 then list else nil
+	store.set(data.KV_PLAN_HIDDEN, settings.plan_hidden)
+end
+
 -- Moves account `name` of provider `id` among its accounts (`how`: see `moved`).
 local function move_account(id: string, name: string, how: string | number)
 	local provider = offered(id)
@@ -365,6 +382,43 @@ local function after_change(cx: WindowCx?)
 		refresh(cx)
 		flush_panel(cx)
 	end
+end
+
+-- Every account whose provider names its plan, to show each plan in the card or leave it out. Picking one
+-- toggles it and opens the list again; Esc is done.
+local function open_plans(cx: WindowCx)
+	local settings = load_settings()
+	local items: { PickItem } = {}
+	for _, provider in providers_in_order(settings) do
+		local several = #provider.accounts > 1
+		local keys = if several then accounts_in_order(provider.accounts, settings.account_order[provider.id]) else { "" }
+		for _, key in keys do
+			local account = if several then key else nil
+			local plan = data.plan_in(provider.details, account)
+			if plan then
+				table.insert(items, {
+					label = provider.label .. (if account then " " .. account else ""),
+					detail = plan,
+					current = not data.plan_off(settings, provider.id, key),
+					id = provider.id,
+					name = key,
+				})
+			end
+		end
+	end
+	if #items == 0 then
+		return
+	end
+	cx:pick({ items = items, placeholder = "Which plans show in the card? Esc when done", action = "toggle" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item == nil then
+				return
+			end
+			toggle_plan((item :: any).id, (item :: any).name)
+			local cx2 = next_cx or cx
+			after_change(cx2)
+			open_plans(cx2)
+		end)
 end
 
 -- Asks for a provider's own colors; a bad answer toasts and changes nothing, an empty one nothing at all.
@@ -591,7 +645,7 @@ local function open_account_choices(cx: WindowCx, id: string, switches: boolean?
 	local items: { PickItem } = {
 		{ label = "All accounts", detail = string.format("%d accounts, one after another", #shown), group = "Show", current = chosen == nil and together ~= COMBINED and together ~= COMBINED_PLANS, pick = "show", name = "" },
 		{ label = "Combined", detail = "one set of windows, shares averaged", group = "Show", current = together == COMBINED, pick = "show", name = COMBINED },
-		{ label = "Combined by plan", detail = "same windows together, shares averaged", group = "Show", current = together == COMBINED_PLANS, pick = "show", name = COMBINED_PLANS },
+		{ label = "Combined by plan", detail = "same plan together, shares averaged", group = "Show", current = together == COMBINED_PLANS, pick = "show", name = COMBINED_PLANS },
 	}
 	for _, name in shown do
 		table.insert(items, { label = name, detail = left(name), group = "Show", current = chosen == name, pick = "show", name = name })
@@ -695,6 +749,8 @@ return {
 	move_provider = move_provider,
 	choose_account = choose_account,
 	toggle_account = toggle_account,
+	toggle_plan = toggle_plan,
+	open_plans = open_plans,
 	move_account = move_account,
 	after_change = after_change,
 	prompt_color = prompt_color,

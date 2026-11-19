@@ -360,6 +360,14 @@ local LINE_CSS = [==[
 .sf-dock .sf-col[data-role^='omp.editor'] {
 	margin-top: 15px;
 }
+/* Tern's agents and jobs tray lifts the meter (and the line on it) above itself, right under the working row: the
+   same room again, above the tray */
+.sf-dock.sf-tray-ctx > .sf-col.sf-tray {
+	margin-top: 15px;
+}
+.sf-dock.sf-tray-ctx > .sf-col.sf-tray.under {
+	margin-top: 19px;
+}
 /* the providers' colors */
 $PALETTE
 /* the line: 10px mono in a 13px box whose second line (where a window that doesn't fit wraps) is cut off; one
@@ -409,6 +417,16 @@ $METER_SPINE::after {
 	bottom: auto;
 	margin-bottom: 0;
 }
+/* except over the tray, where Tern lifts the meter onto the tray's sides in every chat style: the line rides above
+   it, as in the other styles */
+$METER_TRAY::before,
+$METER_TRAY::after {
+	left: 0;
+	right: 0;
+	top: auto;
+	bottom: 100%;
+	margin-bottom: 2px;
+}
 /* with attachments the target is the first chip's end slot: the row doesn't clip it, and the chip isn't its
    containing block, so it is placed from the composer, as the empty row is */
 $CHIPS {
@@ -418,7 +436,8 @@ $CHIPS > .sf-card:first-child {
 	position: static;
 }
 /* the hover target over the line: the meter's place in each chat style, widened by the capsule's 6px pad, as
-   long as the line (or the meter, if that's shorter) */
+   long as the line (or the meter, if that's shorter). At rest it sits under the line, as its backdrop (see
+   below); hovered, over it */
 $HOST {
 	display: block !important;
 	position: absolute;
@@ -431,7 +450,7 @@ $HOST {
 	padding: 0;
 	overflow: visible;
 	opacity: 1;
-	z-index: 5;
+	z-index: -1;
 	pointer-events: auto;
 	border-radius: 8px;
 	background-color: transparent;
@@ -453,8 +472,17 @@ $HOST_CONSOLE {
 	left: calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px);
 	width: min($WIDTH, calc(min(100%, 1040px) - var(--cn-gut) + 12px));
 }
+/* over the tray, the target follows the meter Tern lifts above it: else it would sit on the tray's cards, taking
+   their hover and clicks */
+$HOST_TRAY {
+	left: calc(var(--sf-tray-ctx-l, 22px) - 6px);
+	top: calc(-28px - var(--sf-tray-lift, 0px));
+	width: min($WIDTH, calc(100% - var(--sf-tray-ctx-l, 22px) - var(--sf-tray-ctx-r, 22px) + 12px));
+}
+$BACKDROP
 /* hovered, the line lifts into a glass capsule, ringed in its provider's color (or the lowest window's tone) */
 $HOST:hover {
+	z-index: 5;
 	background-color: var(--ou-glass);
 	box-shadow:
 		0 0 0 1px var(--ou-ring),
@@ -503,6 +531,14 @@ $METER::after {
 	pointer-events: none;
 }]==]
 
+-- The line's backdrop at rest, by the Line background setting (see data.luau's BACKDROPS): the target under the
+-- line, frosted or opaque in the card's glass, or nothing.
+local BACKDROP_CSS: { [string]: string } = {
+	glass = "$HOST {\n\tbackground-color: light-dark(rgb(from var(--card) r g b / 62%), rgb(from var(--pop-bg) r g b / 62%));\n\tbackdrop-filter: blur(10px) saturate(160%);\n}",
+	solid = "$HOST {\n\tbackground-color: var(--ou-glass);\n}",
+	clear = "",
+}
+
 local function line_css(line: Line, model: Model, settings: Settings): string
 	local paint = line_paint(line)
 	local rest = tips(line, 55)
@@ -517,13 +553,16 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 	return fill(LINE_CSS, {
 		METER = meter(),
 		METER_SPINE = meter(".sf-chat-spine"),
+		METER_TRAY = meter(".sf-tray-ctx"),
 		SPINE_SIDE = SPINE_SIDE,
 		CHIPS = line_pane .. " " .. CHIPS,
 		HOST = host(nil),
 		HOST_READER = host(".sf-chat-reader"),
 		HOST_SPINE = host(".sf-chat-spine"),
 		HOST_CONSOLE = host(".sf-chat-console"),
+		HOST_TRAY = host(".sf-tray-ctx"),
 		PALETTE = palette_css(model, settings),
+		BACKDROP = fill(BACKDROP_CSS[settings.backdrop] or "", { HOST = host(nil) }),
 		CONTENT = css_string(line.text),
 		PAINT = paint,
 		TIPS_CSS = if #rest.images > 0
@@ -639,13 +678,21 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 			local accent = group_color(g, "a")
 			local first = group.windows[1]
 			local hover = fixed ~= "details"
+			-- In the hover a heading is ink, as the title is, so its plan pill reads the same in every mode (the
+			-- card's text takes one color a row); the provider's colors go to a bar down its rows (see `bar`). The
+			-- details view takes its colors from the heading.
+			local head = if hover then "var(--oc-head)" else accent
+			local heading_at: number? = nil
 			if several and not (first and first.lead) then
 				table.insert(rows, {
 					text = group.label,
-					color = accent,
+					color = head,
 					heading = true,
 					badge = if hover then plan_of(group.details or {}, nil) else nil,
+					a = accent,
+					b = group_color(g, "b"),
 				})
+				heading_at = #rows
 			elseif hover and not several then
 				rows[1].badge = plan_of(group.details or {}, nil)
 			end
@@ -697,7 +744,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 					local text, low = account_summary((if several then group.label .. " " else "") .. name, windows, group.id)
 					if #windows == 0 then
 						for _, detail in details do
-							if detail.account == name then
+							if detail.account == name and detail.kind ~= "plan" then
 								text ..= " · " .. detail.text
 								break
 							end
@@ -729,8 +776,10 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				end
 				table.insert(runs[#runs].windows, window)
 			end
-			-- A source may report absolute amounts or an error without any percentage meter.
+			-- A source may report absolute amounts or an error without any percentage meter. A plan alone only labels
+			-- an account's windows.
 			for _, detail in details do
+				if detail.kind == "plan" then continue end
 				local found = false
 				for _, run in runs do
 					if run.name == detail.account or detail.account == nil then
@@ -757,10 +806,12 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 							.. ((run.windows[1] and run.windows[1].plan) or run.name :: string)
 						table.insert(new, {
 							text = heading,
-							color = accent,
+							color = head,
 							rule = r > 1,
 							heading = true,
 							badge = if hover then plan_of(details, run.name) else nil,
+							a = accent,
+							b = group_color(g, "b"),
 						})
 					end
 					for _, window in run.windows do
@@ -781,6 +832,18 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						if window.covers then
 							table.insert(new, { text = CARD_INDENT .. (window.covers :: string), color = "var(--oc-mute)" })
 						end
+						local reset = window.reset
+						if reset == "soon" then
+							table.insert(new, { text = CARD_INDENT .. "resets soon", color = "var(--oc-mute)" })
+						elseif reset then
+							local row = "resets in " .. reset
+							local minutes, exact = countdown_minutes(reset)
+							local at = if minutes then clock_at(minutes, exact) else nil
+							if at then
+								row ..= " · " .. at
+							end
+							table.insert(new, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
+						end
 						local has_dates = add_resets(new, string.lower(window.label))
 						if not has_dates and window.saved then
 							local saved = window.saved :: number
@@ -794,21 +857,12 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 								color = if window.expires then "var(--oc-warn)" else accent,
 							})
 						end
-						local reset = window.reset
-						if reset == "soon" then
-							table.insert(new, { text = CARD_INDENT .. "resets soon", color = "var(--oc-mute)" })
-						elseif reset then
-							local row = "resets in " .. reset
-							local minutes, exact = countdown_minutes(reset)
-							local at = if minutes then clock_at(minutes, exact) else nil
-							if at then
-								row ..= " · " .. at
-							end
-							table.insert(new, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
-						end
 						add_details(new, run.name, window.label, false)
 					end
 					add_details(new, run.name, nil, r == 1)
+					if run.name and hover then
+						new[1].bar = #new
+					end
 					done[made] = new
 					part = new
 				end
@@ -842,6 +896,9 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 					),
 					color = if fold_muted then "var(--oc-mute)" elseif tone == "ok" then accent else "var(--oc-win-" .. tone .. ")",
 				})
+			end
+			if heading_at and hover then
+				rows[heading_at :: number].bar = #rows - (heading_at :: number) + 1
 			end
 		end
 		for _, other in model.others do
@@ -1040,6 +1097,19 @@ local function card_css(rows: { Row }, target: string?): string
 				string.format("0 %spx", num(meter)),
 				"100% 2px",
 				"100% 2px",
+				"content-box"
+			)
+		end
+		-- a heading's bar: 2px in its provider's colors down the left margin, beside its rows, fading out at the end
+		if row.bar and row.a then
+			local a = row.a :: string
+			local b = row.b or a
+			local size = string.format("2px %spx", num((row.bar :: number) * CARD_ROW - 8))
+			layer(
+				string.format("linear-gradient(180deg, %s, %s 70%%, %s)", solid(a), solid(b), faded(b, 0)),
+				string.format("-7px %spx", num(y + 4)),
+				size,
+				size,
 				"content-box"
 			)
 		end

@@ -153,7 +153,7 @@ local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: 
 	local hint = settings_hint(shortcut(cx))
 	local running = if pulse and tern.now() < pulse.until_ms then pulse.seq else 0
 	local hidden = table.concat(dock.hide, "\n")
-	local key = table.concat({ model.signature, colors_key(settings), hint, tostring(running), hidden, line_pane() }, "\n")
+	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, hint, tostring(running), hidden, line_pane() }, "\n")
 	if key ~= sheet_key then
 		sheet_key = key
 		install(hide_css(dock.hide) .. sheet(model, settings, pulse, hint))
@@ -329,6 +329,8 @@ local function open_menu(cx: WindowCx)
 				open_windows(cx2)
 			elseif choice.pick == "accounts" then
 				open_accounts(cx2)
+			elseif choice.pick == "plans" then
+				pickers.open_plans(cx2)
 			elseif choice.pick == "card-rows" then
 				local items: { PickItem } = {}
 				for _, rows in CARD_ROWS do
@@ -338,6 +340,18 @@ local function open_menu(cx: WindowCx)
 					:next(function(picked: PickItem?, _err2: string?, last_cx: WindowCx?)
 						if picked then
 							store.set(KV_CARD_ROWS, (picked :: any).rows)
+							after_change(last_cx or cx2)
+						end
+					end)
+			elseif choice.pick == "backdrop" then
+				local items: { PickItem } = {}
+				for _, option in data.BACKDROPS do
+					table.insert(items, { label = option.label, detail = option.detail, current = option.id == settings.backdrop, backdrop = option.id })
+				end
+				cx2:pick({ items = items, placeholder = "What sits behind the line, over the chat scrolling under the composer?", icon = "gauge" })
+					:next(function(picked: PickItem?, _err2: string?, last_cx: WindowCx?)
+						if picked then
+							store.set(data.KV_BACKDROP, (picked :: any).backdrop)
 							after_change(last_cx or cx2)
 						end
 					end)

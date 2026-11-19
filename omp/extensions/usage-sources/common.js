@@ -15,6 +15,14 @@ export function normalizeProvider(value) {
   return PROVIDERS[key] ?? key;
 }
 
+// Google Code Assist tier ids as CPA Management Center names their plans.
+export const GOOGLE_TIER_PLANS = new Map([
+  ["free-tier", "free"],
+  ["g1-pro-tier", "pro"],
+  ["g1-ultra-lite-tier", "ultra-lite"],
+  ["g1-ultra-tier", "ultra"],
+]);
+
 // Same tier names omp gives Codex's additional meters.
 export function codexTier(limitName, meteredFeature) {
   const probe = `${limitName} ${meteredFeature}`.toLowerCase();

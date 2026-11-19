@@ -124,15 +124,27 @@ local KV_HIDDEN = "omp-usage.hidden"
 local KV_ACCOUNT = "omp-usage.account"
 local KV_ACCOUNT_ORDER = "omp-usage.account-order"
 local KV_ACCOUNT_HIDDEN = "omp-usage.account-hidden"
+-- By provider id, the accounts whose plan pill the card and the quota details leave out ("" for a provider with
+-- one account). Combining by plan still groups by it.
+local KV_PLAN_HIDDEN = "omp-usage.plan-hidden"
 -- The card's height limit in rows: one of CARD_ROWS, 26 unless set. Rows are 18px, so 26 rows are a card about
 -- 480px tall, which a full-height pane on a 1080p screen holds; the plugin can't see a pane's height, so taller
 -- (or split) panes are the user's to set.
 local KV_CARD_ROWS = "omp-usage.card-rows"
 local CARD_ROWS = { 16, 20, 26, 32, 40, 50 }
 local CARD_ROWS_DEFAULT = 26
+-- What sits behind the line while it isn't hovered (see render.luau's LINE_CSS): Tern's chats scroll under the
+-- composer, so a line over bare transcript text can be hard to read. Glass unless set.
+local KV_BACKDROP = "omp-usage.backdrop"
+local BACKDROPS: { { id: string, label: string, detail: string } } = {
+	{ id = "glass", label = "Glass", detail = "frosted: what scrolls behind it blurs away" },
+	{ id = "solid", label = "Solid", detail = "the card's glass, opaque" },
+	{ id = "clear", label = "Clear", detail = "nothing: the line over whatever is behind it" },
+}
+local BACKDROP_DEFAULT = "glass"
 -- In KV_ACCOUNT, in place of an account's name: show the provider's accounts combined, all in one set of windows
--- (COMBINED), or a set per plan (COMBINED_PLANS: the accounts that report the same windows); each window's share
--- their average (see `combined`).
+-- (COMBINED), or a set per plan (COMBINED_PLANS: the plan each account reports, else the accounts that report the
+-- same windows); each window's share their average (see `combined`).
 local COMBINED = "\1combined"
 local COMBINED_PLANS = "\1plans"
 
@@ -185,7 +197,9 @@ export type Settings = {
 	account: { [string]: string },
 	account_order: { [string]: { string } },
 	account_hidden: { [string]: { string } },
+	plan_hidden: { [string]: { string } },
 	card_rows: number,
+	backdrop: string,
 }
 
 -- The cache file as last read, its parse, and the last providers it listed (see `read_cache`).
@@ -720,7 +734,9 @@ local function load_settings(): Settings
 		account = {},
 		account_order = {},
 		account_hidden = {},
+		plan_hidden = {},
 		card_rows = CARD_ROWS_DEFAULT,
+		backdrop = BACKDROP_DEFAULT,
 	}
 	local mode = store.get(KV_MODE)
 	if mode == "all" or mode == "selected" then
@@ -729,6 +745,12 @@ local function load_settings(): Settings
 	local rows = store.get(KV_CARD_ROWS)
 	if type(rows) == "number" and table.find(CARD_ROWS, rows) then
 		settings.card_rows = rows
+	end
+	local backdrop = store.get(KV_BACKDROP)
+	for _, choice in BACKDROPS do
+		if backdrop == choice.id then
+			settings.backdrop = choice.id
+		end
 	end
 	local colors = store.get(KV_COLORS)
 	if type(colors) == "table" then
@@ -770,6 +792,15 @@ local function load_settings(): Settings
 			local list = id_list(names)
 			if type(id) == "string" and #list > 0 then
 				settings.account_hidden[id] = list
+			end
+		end
+	end
+	local plan_hidden = store.get(KV_PLAN_HIDDEN)
+	if type(plan_hidden) == "table" then
+		for id, names in pairs(plan_hidden) do
+			local list = id_list(names)
+			if type(id) == "string" and #list > 0 then
+				settings.plan_hidden[id] = list
 			end
 		end
 	end
@@ -825,6 +856,22 @@ local function account_off(settings: Settings, id: string, name: string): boolea
 	return off ~= nil and table.find(off, name) ~= nil
 end
 
+-- Whether the plan of provider `id`'s account `name` ("" with one account) is left out of the card and details.
+local function plan_off(settings: Settings, id: string, name: string): boolean
+	local off = settings.plan_hidden[id]
+	return off ~= nil and table.find(off, name) ~= nil
+end
+
+-- The plan `details` name for an account (`account` nil: the provider's single account), if they name one.
+local function plan_in(details: { Detail }?, account: string?): string?
+	for _, detail in details or {} do
+		if detail.kind == "plan" and detail.value and detail.window == nil and detail.account == account then
+			return detail.value
+		end
+	end
+	return nil
+end
+
 -- The one account the line and card show for provider `id` (of `accounts`), while it is still signed in and
 -- switched on; nil for every account that is.
 local function chosen_account(settings: Settings, id: string, accounts: { string }): string?
@@ -840,15 +887,26 @@ local function window_name(label: string): string
 end
 
 -- A provider's accounts (`on`: each one's windows, in order, the first leading) combined, all in one group, or, `by
--- plan`, the accounts that report the same windows together (most likely one plan; omp doesn't say). Each group
--- gets one run of windows (every window any of its accounts has, in the order they first come), named for how many
--- accounts it holds (`6 accounts`; a group of one keeps the account's name). A window's share is the average of
--- the group's accounts that have it (`covers` says how many when not all do), its reset the soonest of theirs, its
--- saved resets all of theirs. `loose` (windows without an account) go first. When one window sets the groups
--- apart, the groups without it say so in their name (`4 accounts, no 5H`), and each group's lead window carries
--- `plan`, its heading in the card (`6 accounts with a 5-hour window`); with more than one, the heading lists the
--- group's windows (`4 accounts · 7D · FABLE 7D`). Also, for the panel: the chip's text and each account's group tag.
-local function combined(on: { { Window } }, loose: { Window }, by_plan: boolean): ({ Window }, { chip: string, tags: { [string]: string } })
+-- plan`, by plan: the plan each account is on (`reported`, by account name) when the provider names one for all of
+-- them, else the accounts that report the same windows together (most likely one plan). Each group gets one run of
+-- windows (every window any of its accounts has, in the order of the account with the most, then any it lacks),
+-- named for how many accounts it holds (`6 accounts`, `2 Max 20x accounts`; a group of one keeps the account's
+-- name). A window's share is the average of the group's accounts that have it (`covers` says how many when not all
+-- do), its reset the soonest of theirs, its saved resets all of theirs. `loose` (windows without an account) go
+-- first. Grouped by windows, when one window sets the groups apart, the groups without it say so in their name (`4
+-- accounts, no 5H`), and each group's lead window carries `plan`, its heading in the card (`6 accounts with a
+-- 5-hour window`); with more than one, the heading lists the group's windows (`4 accounts · 7D · FABLE 7D`). Also,
+-- for the panel: the chip's text and each account's group tag.
+local function combined(
+	on: { { Window } },
+	loose: { Window },
+	by_plan: boolean,
+	reported: { [string]: string }
+): ({ Window }, { chip: string, tags: { [string]: string } })
+	local named = by_plan and #on > 0
+	for _, list in on do
+		named = named and reported[list[1].account :: string] ~= nil
+	end
 	local plans: { { key: string, lists: { { Window } } } } = {}
 	for _, list in on do
 		local labels: { string } = {}
@@ -856,7 +914,7 @@ local function combined(on: { { Window } }, loose: { Window }, by_plan: boolean)
 			table.insert(labels, string.lower(window.bare or window.label))
 		end
 		table.sort(labels)
-		local key = if by_plan then table.concat(labels, "|") else ""
+		local key = if named then reported[list[1].account :: string] elseif by_plan then table.concat(labels, "|") else ""
 		local plan = nil
 		for _, candidate in plans do
 			if candidate.key == key then
@@ -897,7 +955,22 @@ local function combined(on: { { Window } }, loose: { Window }, by_plan: boolean)
 		names[p] = if #plan.lists == 1 then plan.lists[1][1].account :: string else tostring(#plan.lists) .. " accounts"
 		heads[p] = names[p]
 	end
-	if #plans == 1 then
+	if named then
+		-- by the plans the provider reports: `2 Pro accounts`, a lone account `dev-bot (Plus)`
+		local split: { string } = {}
+		for p, plan in plans do
+			local n = #plan.lists
+			names[p] = if n == 1 then string.format("%s (%s)", names[p], plan.key) else string.format("%d %s accounts", n, plan.key)
+			heads[p] = names[p]
+			table.insert(split, string.format("%d %s", n, plan.key))
+			for _, list in plan.lists do
+				info.tags[list[1].account :: string] = plan.key
+			end
+		end
+		info.chip = if #plans == 1
+			then string.format("by plan · all %d %s", accounts, plans[1].key)
+			else "by plan · " .. table.concat(split, ", ")
+	elseif #plans == 1 then
 		info.chip = if by_plan
 			then string.format("by plan · all %d alike", accounts)
 			else string.format("combined · %d accounts", accounts)
@@ -951,10 +1024,17 @@ local function combined(on: { { Window } }, loose: { Window }, by_plan: boolean)
 	end
 	for p, plan in plans do
 		local name = names[p]
-		-- every window the group's accounts have, in the order they first come
+		-- every window the group's accounts have: in the order of the account with the most (`5H`, `7D`, …), then
+		-- any it lacks, in the order they first come
+		local fullest = plan.lists[1]
+		for _, list in plan.lists do
+			if #list > #fullest then
+				fullest = list
+			end
+		end
 		local order: { Window } = {}
 		local seen: { [string]: boolean } = {}
-		for _, list in plan.lists do
+		for _, list in { fullest, table.unpack(plan.lists) } do
 			for _, window in list do
 				local key = string.lower(window.bare or window.label)
 				if not seen[key] then
@@ -1004,12 +1084,13 @@ end
 -- windows then coming back as `rest` for the card, or the accounts combined (see `combined`). Accounts switched
 -- off are left out of all of it. Each window knows its account, and the first of each leads it (see `Window`).
 -- With fewer than two accounts the windows come back as they are. Combined, the chip's text and the accounts' group
--- tags come back third (see `combined`).
+-- tags come back third (see `combined`; `details`: the provider's, for the plan each account reports).
 local function account_view(
 	settings: Settings,
 	id: string?,
 	accounts: { string },
-	windows: { Window }
+	windows: { Window },
+	details: { Detail }?
 ): ({ Window }, { Window }?, { chip: string, tags: { [string]: string } }?)
 	if id == nil or #accounts < 2 then
 		return windows, nil
@@ -1044,7 +1125,13 @@ local function account_view(
 	end
 	local mode = settings.account[id :: string]
 	if one == nil and (mode == COMBINED or mode == COMBINED_PLANS) then
-		local together, info = combined(on, loose, mode == COMBINED_PLANS)
+		local reported: { [string]: string } = {}
+		for _, detail in details or {} do
+			if detail.kind == "plan" and detail.value and detail.account and detail.window == nil then
+				reported[detail.account :: string] = detail.value
+			end
+		end
+		local together, info = combined(on, loose, mode == COMBINED_PLANS, reported)
 		return together, nil, info
 	end
 	return shown, rest
@@ -1167,6 +1254,34 @@ local function named_palette(key: string): Palette?
 	return nil
 end
 
+-- A custom color as the theme shows it: the presets are light/dark pairs, a typed hex is one color for both, so
+-- one that is nearly white would vanish on the light theme's card and one nearly black on the dark one. Those get
+-- a counterpart for that theme, the same hue taken dark (a light color in the light theme) or light (a dark color
+-- in the dark theme); anything in between reads on both as it is.
+local function themed(hex: string): string
+	local channels: { number } = {}
+	for i = 0, 2 do
+		table.insert(channels, (tonumber(string.sub(hex, 2 + i * 2, 3 + i * 2), 16) :: number) / 255)
+	end
+	local function linear(c: number): number
+		return if c <= 0.04045 then c / 12.92 else ((c + 0.055) / 1.055) ^ 2.4
+	end
+	local luminance = 0.2126 * linear(channels[1]) + 0.7152 * linear(channels[2]) + 0.0722 * linear(channels[3])
+	local function mixed(toward: number, amount: number): string
+		local out = "#"
+		for _, c in channels do
+			out ..= string.format("%02x", math.floor((c + (toward - c) * amount) * 255 + 0.5))
+		end
+		return out
+	end
+	if luminance > 0.6 then
+		return string.format("light-dark(%s, %s)", mixed(0, 0.7), hex)
+	elseif luminance < 0.03 then
+		return string.format("light-dark(%s, %s)", hex, mixed(1, 0.75))
+	end
+	return hex
+end
+
 -- A stored color choice as a palette; nil when it isn't one (then the preset applies).
 local function palette_of_spec(spec: string): Palette?
 	local key = string.match(spec, "^named:(.+)$")
@@ -1175,7 +1290,7 @@ local function palette_of_spec(spec: string): Palette?
 	end
 	local colors = parse_colors(spec)
 	if colors then
-		return { name = table.concat(colors, ", "), a = colors[1], b = colors[2] }
+		return { name = table.concat(colors, ", "), a = themed(colors[1]), b = if colors[2] then themed(colors[2]) else nil }
 	end
 	return nil
 end
@@ -1253,11 +1368,24 @@ local function signature_of(groups: { Group }, others: { string }, title: string
 	return table.concat(parts, "\n")
 end
 
+-- Whether `details` hold anything to show on their own: a plan only labels its account's windows.
+local function has_facts(details: { Detail }?): boolean
+	for _, detail in details or {} do
+		if detail.kind ~= "plan" then
+			return true
+		end
+	end
+	return false
+end
+
 -- Quantities follow account visibility, but never average unlike units or estimates.
 local function visible_details(settings: Settings, id: string?, accounts: { string }, details: { Detail }?): { Detail }
 	local visible: { Detail } = {}
 	local chosen = if id then chosen_account(settings, id, accounts) else nil
 	for _, detail in details or {} do
+		if detail.kind == "plan" and id and plan_off(settings, id, detail.account or "") then
+			continue
+		end
 		if detail.account and id and (account_off(settings, id, detail.account) or (chosen ~= nil and chosen ~= detail.account)) then
 			continue
 		end
@@ -1271,8 +1399,9 @@ local function visible_details(settings: Settings, id: string?, accounts: { stri
 		table.insert(visible, detail)
 	end
 	local mode = if id then settings.account[id] else nil
-	if #accounts > 1 and #visible > 0 and (mode == COMBINED or mode == COMBINED_PLANS) then
-		return { { text = "Quantities: choose one or All accounts" } }
+	if #accounts > 1 and (mode == COMBINED or mode == COMBINED_PLANS) then
+		-- combined, the plans name the groups instead (see `combined`)
+		return if has_facts(visible) then { { text = "Quantities: choose one or All accounts" } } else {}
 	end
 	return visible
 end
@@ -1295,12 +1424,12 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 		for _, provider in ordered(providers, settings.order) do
 			if settings.mode == "all" or table.find(settings.selected, provider.id) then
 				local provider_label, provider_windows = parse_line(provider.line)
-				listed = listed or #provider_windows > 0 or #(provider.details or {}) > 0
+				listed = listed or #provider_windows > 0 or has_facts(provider.details)
 				provider_windows = shown_windows(settings, provider.id, provider_windows)
 				local rest: { Window }? = nil
-				provider_windows, rest = account_view(settings, provider.id, provider.accounts, provider_windows)
+				provider_windows, rest = account_view(settings, provider.id, provider.accounts, provider_windows, provider.details)
 				local details = visible_details(settings, provider.id, provider.accounts, provider.details)
-				if #provider_windows > 0 or #details > 0 then
+				if #provider_windows > 0 or has_facts(details) then
 					table.insert(groups, {
 						key = provider.id,
 						id = provider.id,
@@ -1334,16 +1463,16 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 		local accounts = accounts_of(cache, id)
 		windows = shown_windows(settings, id, windows)
 		local rest: { Window }? = nil
-		windows, rest = account_view(settings, id, accounts, windows)
+		windows, rest = account_view(settings, id, accounts, windows, if entry then entry.details else nil)
 		local details = visible_details(settings, id, accounts, if entry then entry.details else nil)
-		if #details > 0 and #windows == 0 and entry then
+		if has_facts(details) and #windows == 0 and entry then
 			local kept: { string } = {}
 			for _, other in others do
 				if other ~= entry.line then table.insert(kept, other) end
 			end
 			others = kept
 		end
-		if #windows > 0 or #details > 0 then
+		if #windows > 0 or has_facts(details) then
 			table.insert(groups, {
 				key = id or label or "usage",
 				id = id,
@@ -1441,8 +1570,11 @@ return {
 	KV_ACCOUNT = KV_ACCOUNT,
 	KV_ACCOUNT_ORDER = KV_ACCOUNT_ORDER,
 	KV_ACCOUNT_HIDDEN = KV_ACCOUNT_HIDDEN,
+	KV_PLAN_HIDDEN = KV_PLAN_HIDDEN,
 	KV_CARD_ROWS = KV_CARD_ROWS,
 	CARD_ROWS = CARD_ROWS,
+	KV_BACKDROP = KV_BACKDROP,
+	BACKDROPS = BACKDROPS,
 	COMBINED = COMBINED,
 	COMBINED_PLANS = COMBINED_PLANS,
 	now_ms = now_ms,
@@ -1461,6 +1593,8 @@ return {
 	accounts_in_order = accounts_in_order,
 	account_of = account_of,
 	account_off = account_off,
+	plan_off = plan_off,
+	plan_in = plan_in,
 	chosen_account = chosen_account,
 	window_name = window_name,
 	account_view = account_view,

@@ -39,6 +39,6 @@ live accounts.
 node --test tests/*.test.mjs
 ```
 
-Tested with Tern 0.9.26 and omp 18.22.0 on Windows. The quota details with Keeper data were checked against a
+Tested with Tern 0.9.28 and omp 19.0.0 on Windows. The quota details with Keeper data were checked against a
 redacted Keeper quota-cache replay on Linux (Tern 0.9.18, omp 18.18.9), not against every CPA quota plugin or a live
 deployment.

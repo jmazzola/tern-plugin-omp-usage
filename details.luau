@@ -21,10 +21,12 @@ export type Row = {
 	value: string?,
 	account_note: boolean?,
 	shared: boolean?,
-	-- hover only: a pill at the row's right end (an account's plan), and icons drawn over blank cells of the
-	-- row's text (`cell`: the first of the icon's three cells; `kind`: "tokens" or "cost")
+	-- hover only: a pill at the row's right end (an account's plan), icons drawn over blank cells of the row's
+	-- text (`cell`: the first of the icon's three cells; `kind`: "tokens" or "cost"), and on a heading, how many
+	-- rows (its own first) the bar in its provider's colors (`a`, `b`) runs beside
 	badge: string?,
 	icons: { { cell: number, kind: string } }?,
+	bar: number?,
 }
 
 type Amounts = { tokens: string?, cost: string? }

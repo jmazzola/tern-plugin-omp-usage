@@ -35,7 +35,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadUsageSources } from "./usage-sources/index.js";
-import { cleanText, limitDetails, reportNotes } from "./usage-sources/details.js";
+import { cleanText, limitDetails, planRow, reportNotes } from "./usage-sources/details.js";
 
 const STATUS_KEY = "usage-remaining";
 const INTERVAL_MS = 60_000;
@@ -342,11 +342,25 @@ function savedResets(report, applies, bares, account) {
   return out.sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
+// The model families a tier meter counts: Claude's Fable weekly meter also
+// meters Mythos (omp's usage reports name only Fable for the one counter).
+const METER_FAMILIES = { fable: ["fable", "mythos"] };
+
+// Whether model `bare` draws on a tier meter (see scopeOf): `Fable 7d` for
+// claude-fable-5 and claude-mythos-5.
+function metersModel(scope, bare) {
+  if (!bare || scope.kind !== "meter") return false;
+  const families = METER_FAMILIES[scope.name] ?? [scope.tier || scope.name];
+  return families.some((family) => family && bare.includes(family));
+}
+
 // The windows `applies` passes, joined: one per window, a limit with a
 // tier/model scope (see scopeOf) on its own, labeled with it (`Fable 7d`) and
 // keyed apart from the general window of the same length. `account` (set when
-// the provider has several accounts) leads every label: `alice 5h`.
-function renderRemaining(report, applies, bares, account) {
+// the provider has several accounts) leads every label: `alice 5h`. The meter
+// model `bare` draws on comes first (Fable 7d while a Fable or Mythos model is
+// active), so the window that limits it leads the line.
+function renderRemaining(report, applies, bares, account, bare) {
   if (report.stale) return "";
   const now = Date.now();
   const seen = new Map();
@@ -354,7 +368,8 @@ function renderRemaining(report, applies, bares, account) {
     if (!applies(limit)) continue;
     const w = windowOf(limit);
     if (!w) continue;
-    const scope = scopeOf(limit, bares).name.replace(/\s+/g, "-");
+    const scopeInfo = scopeOf(limit, bares);
+    const scope = scopeInfo.name.replace(/\s+/g, "-");
     const key = scope ? `${scope}:${w.key}` : w.key;
     if (seen.has(key)) continue;
     const scoped = scope ? `${scope[0].toUpperCase()}${scope.slice(1)} ${w.label}` : w.label;
@@ -379,11 +394,13 @@ function renderRemaining(report, applies, bares, account) {
         : ` (!${stash} - ${fmtResetShort(expiryLeft)} left)`;
     const resetsAt = limit.window?.resetsAt;
     const reset = typeof resetsAt === "number" ? ` (${fmtResetShort(resetsAt - now)})` : "";
-    seen.set(key, { ms: w.ms, scoped: !!scope, text: `${label} ${meter} ${pct}% left${reset}${extra}` });
+    seen.set(key, { ms: w.ms, scoped: !!scope, own: metersModel(scopeInfo, bare), text: `${label} ${meter} ${pct}% left${reset}${extra}` });
   }
-  // Shortest window first; at the same length the general one before scoped ones.
+  // The active model's own meter first; then shortest window first, at the same length the general one before
+  // scoped ones.
   return [...seen.values()]
-    .sort((a, b) => (a.ms !== b.ms ? (a.ms < b.ms ? -1 : 1) : Number(a.scoped) - Number(b.scoped)))
+    .sort((a, b) => (a.own !== b.own ? Number(b.own) - Number(a.own)
+      : a.ms !== b.ms ? (a.ms < b.ms ? -1 : 1) : Number(a.scoped) - Number(b.scoped)))
     .map((p) => p.text)
     .join(" · ");
 }
@@ -455,7 +472,7 @@ function lineFor(reports, provider, bare, index) {
   if (!isTrackedProvider(provider)) return "";
   const accounts = accountsFor(reports, provider, bare, index);
   const parts = accounts
-    .map((a) => renderRemaining(a.report, a.applies, a.bares, a.account))
+    .map((a) => renderRemaining(a.report, a.applies, a.bares, a.account, bare))
     .filter(Boolean);
   if (parts.length) return `${shortProvider(accounts[0].report.provider)} ${parts.join(" · ")}`;
   return accounts.some((a) => a.report.metadata?.sourceId) ? `${shortProvider(provider)} quota details` : "";
@@ -494,7 +511,9 @@ function detailsFor(reports, provider, bare, index) {
     });
   };
   for (const { report, bares, account, applies } of accountsFor(reports, provider, bare, index)) {
-    if (report.metadata?.sourceId) for (const note of reportNotes(report)) add(note, account);
+    // omp's own reports add only their plan, which rides on the account's heading
+    const notes = report.metadata?.sourceId ? reportNotes(report) : [planRow(report)].filter(Boolean);
+    for (const note of notes) add(note, account);
     for (const limit of report.limits) {
       if (!applies(limit)) continue;
       if (!report.metadata?.sourceId && (!limit.amount?.unit || ["percent", "unknown"].includes(limit.amount.unit)) && !limit.usage) continue;

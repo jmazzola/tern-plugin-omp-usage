@@ -19,6 +19,8 @@ local KV_MODE = data.KV_MODE
 local KV_SELECTED = data.KV_SELECTED
 local KV_CARD_ROWS = data.KV_CARD_ROWS
 local CARD_ROWS = data.CARD_ROWS
+local KV_BACKDROP = data.KV_BACKDROP
+local BACKDROPS = data.BACKDROPS
 local COMBINED = data.COMBINED
 local COMBINED_PLANS = data.COMBINED_PLANS
 local now_ms = data.now_ms
@@ -33,6 +35,8 @@ local accounts_in_order = data.accounts_in_order
 local account_of = data.account_of
 local account_off = data.account_off
 local chosen_account = data.chosen_account
+local plan_off = data.plan_off
+local plan_in = data.plan_in
 local account_view = data.account_view
 local shown_accounts = data.shown_accounts
 local ordered = data.ordered
@@ -69,6 +73,7 @@ local toggle_window = pickers.toggle_window
 local move_provider = pickers.move_provider
 local choose_account = pickers.choose_account
 local toggle_account = pickers.toggle_account
+local toggle_plan = pickers.toggle_plan
 local move_account = pickers.move_account
 local after_change = pickers.after_change
 local prompt_color = pickers.prompt_color
@@ -541,11 +546,19 @@ $P .oup-accts {
 }
 $P .oup-arow {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px 10px;
 	min-height: 30px;
 	padding: 0 2px 0 2px;
+}
+/* an account's name, plan and switch stay on one line, its name column lined up with the others': on a narrow
+   panel its windows wrap instead */
+$P .oup-arow > .oup-sum {
+	flex: 1 1 0;
+	min-width: 0;
+}
+$P .oup-arow .oup-wt {
+	padding: 2px 4px;
 }
 $P .oup-aname {
 	display: flex;
@@ -592,6 +605,30 @@ $P .oup-only {
 	color: rgb(from var(--pa) r g b);
 	background-color: rgb(from var(--pa) r g b / 16%);
 	box-shadow: 0 0 0 1px rgb(from var(--pa) r g b / 45%);
+}
+/* an account's plan, as the card's gold pill: a click shows it in the card and the quota details or leaves it out
+   (faded and struck through); beside the row's switch, so the plans line up in a column */
+$P .oup-plan {
+	flex: none;
+	margin-right: 8px;
+	padding: 0 7px;
+	border-radius: 999px;
+	font: 500 10px/16px var(--mono);
+	white-space: nowrap;
+	color: var(--t1);
+	background-color: light-dark(rgb(183 121 31 / 16%), rgb(246 196 83 / 16%));
+	box-shadow: 0 0 0 1px light-dark(rgb(183 121 31 / 70%), rgb(246 196 83 / 70%));
+	cursor: pointer;
+	transition:
+		opacity 0.18s var(--ease),
+		background-color 0.18s var(--ease);
+}
+$P .oup-plan:hover {
+	background-color: light-dark(rgb(183 121 31 / 26%), rgb(246 196 83 / 26%));
+}
+$P .oup-plan[data-off] {
+	opacity: 0.4;
+	text-decoration-line: line-through;
 }
 /* combined: which group an account went into (`5H`, `no 5H`), at the end of its windows, so the tags
    line up in a column */
@@ -1024,6 +1061,26 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 			text = "Past it, accounts sum up to a row each, then fold into one. A row is 18px: pick what your omp pane holds above the composer.",
 		}),
 	})
+	-- what sits behind the line at rest (see data.luau's BACKDROPS)
+	local backdrop_pills: { Node } = {}
+	local backdrop_note = ""
+	for _, choice in BACKDROPS do
+		local on = choice.id == settings.backdrop
+		if on then
+			backdrop_note = choice.label .. ": " .. choice.detail .. "."
+		end
+		table.insert(backdrop_pills, ui.el("button", {
+			class = "oup-pill",
+			text = choice.label,
+			actions = { click = "backdrop=" .. choice.id },
+			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+		}))
+	end
+	local backdrop = ui.el("div", { class = "oup-urow oup-limit" }, {
+		ui.el("span", { class = "oup-ulabel", text = "Line background" }),
+		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "What sits behind the line" } }, backdrop_pills),
+		ui.el("span", { class = "oup-note", text = backdrop_note .. " Chats scroll under the composer; the background keeps the line readable over them." }),
+	})
 	-- the stage's padding, the card (its rows and padding), the gap and the line: see `.oup-stage`, CARD_CSS
 	local most = build.most_rows(settings, providers, cache, hint)
 	if most > 0 then
@@ -1035,6 +1092,7 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 				ui.el("div", { class = "oup-empty", text = "Nothing to show. Focus an omp pane, or show a window below." }),
 			}),
 			height,
+			backdrop,
 		})
 	end
 	local line = line_of(preview)
@@ -1075,6 +1133,7 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 			})
 		)
 	end
+	table.insert(children, backdrop)
 	return section("preview", "Preview", "what the composer shows, its card open as on a hover", children)
 end
 
@@ -1101,6 +1160,38 @@ function build.show(settings: Settings, providers: { Provider }): Node
 		)
 	end
 	return section("show", "Show", nil, { ui.el("div", { class = "oup-modes" }, options) })
+end
+
+-- The plan an account names (`account` nil: a provider's single account), as a pill at the end of its row that
+-- shows it in the card and the quota details or leaves it out; nil when its provider names no plan.
+local function plan_pill(settings: Settings, provider: Provider, account: string?): Node?
+	local plan = plan_in(provider.details, account)
+	if plan == nil then
+		return nil
+	end
+	local key = account or ""
+	local off = plan_off(settings, provider.id, key)
+	local who = provider.label .. (if account then " " .. account else "")
+	return ui.el("button", {
+		class = "oup-plan",
+		text = plan,
+		actions = { click = "plan=" .. provider.id .. "/" .. key },
+		attrs = {
+			["aria-pressed"] = if off then "false" else "true",
+			["aria-label"] = who .. "'s plan, " .. plan .. (if off then ": show it in the card" else ": leave it out of the card"),
+			["data-off"] = if off then true else nil,
+		},
+	})
+end
+
+-- A row's controls at its right end: its plan pill, when it has one, then its switch.
+local function controls(pill: Node?, switch: Node): Node
+	local children: { Node } = {}
+	if pill then
+		table.insert(children, pill)
+	end
+	table.insert(children, switch)
+	return ui.el("span", { class = "oup-ctl" }, children)
 end
 
 -- What a provider has left, by window (`windows`: its own, or one account's): each a toggle that hides it from
@@ -1189,9 +1280,10 @@ end
 
 -- Where a provider with several accounts would list its windows: one quiet chip saying what the line and card show
 -- (`shown`: the accounts switched on, in order), and a button for the next way to show them: `all 8 accounts` with
--- `combine`; combined, `combined · 8 accounts ✕` with `by plan`; by plan, `by plan · 6 with 5H, 4 without ✕`
--- with `all in one` (see `combined`); with one picked, `only dev.ops ✕`. The ✕ chips are buttons that
--- show every account again. The accounts are picked on their rows (see `account_rows`).
+-- `combine`; combined, `combined · 8 accounts ✕` with `by plan`; by plan, `by plan · 2 Max 20x, 1 Pro ✕` (or, when
+-- not every account names its plan, `by plan · 6 with 5H, 4 without ✕`) with `all in one` (see `combined`); with
+-- one picked, `only dev.ops ✕`. The ✕ chips are buttons that show every account again. The accounts are picked on
+-- their rows (see `account_rows`).
 function build.account_chip(settings: Settings, provider: Provider, shown: { string }): Node
 	local chosen = chosen_account(settings, provider.id, provider.accounts)
 	local function clear(text: string, label: string): Node
@@ -1221,10 +1313,10 @@ function build.account_chip(settings: Settings, provider: Provider, shown: { str
 	local mode = settings.account[provider.id]
 	if #shown > 1 and (mode == COMBINED or mode == COMBINED_PLANS) then
 		-- the groups as the line and card have them (hidden windows left out)
-		local _, _, info = account_view(settings, provider.id, provider.accounts, shown_windows(settings, provider.id, provider.windows))
+		local _, _, info = account_view(settings, provider.id, provider.accounts, shown_windows(settings, provider.id, provider.windows), provider.details)
 		local chip = clear(if info then info.chip else "combined", provider.label .. "'s accounts show combined: show each account again")
 		if mode == COMBINED then
-			return with_button(chip, "by plan", "combine-plans", "Combine " .. provider.label .. "'s accounts by plan: the accounts with the same windows together")
+			return with_button(chip, "by plan", "combine-plans", "Combine " .. provider.label .. "'s accounts by plan: as each account names it, else the accounts with the same windows together")
 		end
 		return with_button(chip, "all in one", "combine", "Combine all of " .. provider.label .. "'s accounts in one set of windows")
 	end
@@ -1243,15 +1335,15 @@ end
 -- toggle, as a provider's are) and a switch that takes it off the line and out of the card, or back. A click on
 -- an account's name shows only that account; on the picked one's, every account again. The picked row's name is
 -- lit and tagged `only`; the others fade (the card sums them up). Combined by plan, each row is tagged with its
--- group (`5H`, `no 5H`; see `combined`). Switched off, a row fades, its name is struck through and can't be
--- picked.
+-- group (`Max 20x`, or by windows `5H`, `no 5H`; see `combined`). Switched off, a row fades, its name is struck
+-- through and can't be picked.
 local function account_rows(settings: Settings, provider: Provider, names: { string }): Node
 	local chosen = chosen_account(settings, provider.id, provider.accounts)
 	local lifted = if moving and moving.kind == "account" and moving.id == provider.id then moving.name else nil
 	local rows: { Node } = {}
 	local tags: { [string]: string } = {}
 	if chosen == nil and settings.account[provider.id] == COMBINED_PLANS then
-		local _, _, info = account_view(settings, provider.id, provider.accounts, shown_windows(settings, provider.id, provider.windows))
+		local _, _, info = account_view(settings, provider.id, provider.accounts, shown_windows(settings, provider.id, provider.windows), provider.details)
 		tags = if info then info.tags else {}
 	end
 	-- an account's name: a button that picks it (or, picked, shows all again), plain text while it is off
@@ -1305,12 +1397,14 @@ local function account_rows(settings: Settings, provider: Provider, names: { str
 				account_name(name, off),
 				ui.el("span", { class = "oup-sum" }, (function(): { Node }
 					local nodes = left_now(settings, provider, windows)
-					if tags[name] and not off then
+					-- by plan, an account showing its plan pill is already tagged with its group
+					local pill_says = not off and not plan_off(settings, provider.id, name) and plan_in(provider.details, name) == tags[name]
+					if tags[name] and not off and not pill_says then
 						table.insert(nodes, ui.el("span", { class = "oup-group", text = tags[name] }))
 					end
 					return nodes
 				end)()),
-				ui.el("span", { class = "oup-ctl" }, {
+				controls(if off then nil else plan_pill(settings, provider, name),
 					ui.el("button", {
 						class = "oup-switch oup-aswitch",
 						actions = { click = "account-show=" .. value },
@@ -1320,8 +1414,7 @@ local function account_rows(settings: Settings, provider: Provider, names: { str
 							["aria-label"] = provider.label .. " " .. name .. " on the line and in the card",
 							["data-on"] = if off then nil else true,
 						},
-					}, { ui.el("span", { class = "oup-knob" }) }),
-				}),
+					}, { ui.el("span", { class = "oup-knob" }) })),
 			})
 		)
 	end
@@ -1345,7 +1438,7 @@ local function provider_row(settings: Settings, provider: Provider, i: number): 
 			{ class = if several then "oup-sum oup-sum-pick" else "oup-sum" },
 			if several then { build.account_chip(settings, provider, shown_accounts(settings, provider)) } else left_now(settings, provider, provider.windows)
 		),
-		ui.el("span", { class = "oup-ctl" }, {
+		controls(if several then nil else plan_pill(settings, provider, nil),
 			ui.el("button", {
 				class = "oup-switch",
 				actions = { click = "toggle=" .. provider.id },
@@ -1355,8 +1448,7 @@ local function provider_row(settings: Settings, provider: Provider, i: number): 
 					["aria-label"] = provider.label .. " under Selected providers",
 					["data-on"] = if on then true else nil,
 				},
-			}, { ui.el("span", { class = "oup-knob" }) }),
-		}),
+			}, { ui.el("span", { class = "oup-knob" }) })),
 	}
 	if several then
 		table.insert(children, account_rows(settings, provider, names))
@@ -1551,6 +1643,7 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		keys or "",
 		details_shortcut() or "",
 		tostring(settings.card_rows),
+		settings.backdrop,
 		update.interval().id,
 		(function(): string
 			local title, sub = update_status()
@@ -1564,9 +1657,16 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		end
 		local accounts = table.concat(accounts_in_order(provider.accounts, settings.account_order[provider.id]), ",")
 		local off = table.concat(settings.account_hidden[provider.id] or {}, ",")
+		local plans: { string } = {}
+		for _, detail in provider.details or {} do
+			if detail.kind == "plan" then
+				table.insert(plans, (detail.account or "") .. "=" .. (detail.value or ""))
+			end
+		end
+		local plans_off = table.concat(settings.plan_hidden[provider.id] or {}, ",")
 		table.insert(
 			parts,
-			table.concat({ provider.id, provider.label, provider.line, table.concat(windows, ","), accounts, settings.account[provider.id] or "", off }, "|")
+			table.concat({ provider.id, provider.label, provider.line, table.concat(windows, ","), accounts, settings.account[provider.id] or "", off, table.concat(plans, ","), plans_off }, "|")
 		)
 	end
 	table.insert(parts, if moving then moving.kind .. ":" .. moving.id .. ":" .. (moving.name or "") else "")
@@ -1577,9 +1677,21 @@ end
 -- The panel's view, its bottom bar and its sheet.
 local function panel_parts(state: PanelState): (Node, Node, string)
 	local rules: { string } = { PANEL_CSS, NAMED_CSS }
+	-- every provider's name as wide as the longest, so their windows start in one column (12.5px mono: 7.5px a glyph)
+	local longest, longest_account = 0, 0
 	for _, provider in state.providers do
 		local pal = "p-" .. pal_key(color_key(provider.id, provider.label))
 		table.insert(rules, palette_rule(pal, palette_for(state.settings, provider.id, provider.label)))
+		longest = math.max(longest, utf8.len(provider.label) or #provider.label)
+		for _, name in provider.accounts do
+			longest_account = math.max(longest_account, utf8.len(name) or #name)
+		end
+	end
+	table.insert(rules, string.format("%s .oup-prow > .oup-who > .oup-name {\n\tflex: none;\n\tmin-width: %spx;\n}", PANEL, tostring(longest * 7.5)))
+	-- every account's name column as wide as the longest name (11.5px mono: 6.9px a glyph, and its 12px padding), up
+	-- to 172px, so the windows start in one column and leave the plan and switch room on one line
+	if longest_account > 0 then
+		table.insert(rules, string.format("%s .oup-arow > .oup-aname {\n\tflex-basis: %spx;\n}", PANEL, tostring(math.min(172, math.ceil(longest_account * 6.9 + 12)))))
 	end
 	local view = ui.el("div", { role = PANEL_ROLE }, {
 		build.preview(state.settings, state.preview, rules, settings_hint(state.keys), state.providers, state.cache),
@@ -1788,6 +1900,21 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 		choose_account(value, COMBINED)
 	elseif act == "combine-plans" then
 		choose_account(value, COMBINED_PLANS)
+	elseif act == "plan" then
+		local id, name = string.match(value, "^([^/]+)/(.*)$")
+		if id == nil or name == nil then
+			return false
+		end
+		toggle_plan(id, name)
+	elseif act == "backdrop" then
+		local known = false
+		for _, choice in BACKDROPS do
+			known = known or choice.id == value
+		end
+		if not known then
+			return false
+		end
+		store.set(KV_BACKDROP, value)
 	elseif act == "card-rows" then
 		local rows = tonumber(value)
 		if rows == nil or not table.find(CARD_ROWS, rows) then
