@@ -56,18 +56,47 @@ local function drop_loader(): boolean
 	return (pcall(tern.fs.remove, LOADER :: string))
 end
 
--- Runs `omp plugin <args>`; `done` gets whether it exited 0, its stdout and why it didn't.
-local function omp(cx: WindowCx, args: { string }, done: (boolean, string, string, WindowCx) -> ())
-	local argv = { "omp", "plugin" }
-	for _, arg in args do
-		table.insert(argv, arg)
+-- Tern's own omp (`<Tern's data folder>/omp/bin/omp`), nil when there isn't one. Tern puts its folder on its
+-- panes' PATH, not on the PATH Tern itself runs with, which on macOS is launchd's bare `/usr/bin:/bin:/usr/sbin:/sbin`.
+-- The plugin's data folder is `<Tern's data folder>/plugin-data/<id>`.
+local function managed_omp(): string?
+	local data = (string.gsub(tern.plugin.data, "\\", "/"))
+	local root = string.match(data, "^(.*)/plugin%-data/[^/]+/?$")
+	if root == nil then
+		return nil
 	end
-	local started, err = pcall(tern.process.run, argv, { env = OMP_ENV, timeout_ms = 30000 }, function(result: ProcessResult, later: WindowCx?)
-		local why = if result.timed_out then "omp took too long" else (string.match(result.stderr, "%S[^\n]*") or "")
-		done(result.status == 0, result.stdout, why, later or cx)
-	end)
+	for _, name in { "omp", "omp.exe" } do
+		local path = root .. "/omp/bin/" .. name
+		local ok, there = pcall(tern.fs.exists, path)
+		if ok and there then
+			return path
+		end
+	end
+	return nil
+end
+
+-- Runs `omp plugin <args>` with the omp on PATH, else Tern's own; `done` gets whether it exited 0, its stdout and
+-- why it didn't.
+local function omp(cx: WindowCx, args: { string }, done: (boolean, string, string, WindowCx) -> ())
+	local function run(exe: string): (boolean, any)
+		local argv = { exe, "plugin" }
+		for _, arg in args do
+			table.insert(argv, arg)
+		end
+		return pcall(tern.process.run, argv, { env = OMP_ENV, timeout_ms = 30000 }, function(result: ProcessResult, later: WindowCx?)
+			local why = if result.timed_out then "omp took too long" else (string.match(result.stderr, "%S[^\n]*") or "")
+			done(result.status == 0, result.stdout, why, later or cx)
+		end)
+	end
+	local started, err = run("omp")
 	if not started then
-		done(false, "", "omp isn't on PATH (" .. tostring(err) .. ")", cx)
+		local managed = managed_omp()
+		if managed then
+			started, err = run(managed)
+		end
+	end
+	if not started then
+		done(false, "", "omp isn't on PATH, and Tern has no omp of its own (" .. tostring(err) .. ")", cx)
 	end
 end
 

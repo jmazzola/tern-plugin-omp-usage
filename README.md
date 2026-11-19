@@ -61,8 +61,8 @@ usage` should list them) or an [external quota source](#external-quota-sources).
 
    <img src="docs/images/toast-installed.png" alt="The toast omp Usage is installed, Restart omp sessions to see the usage line" width="540">
 
-   If it can't (usually because omp isn't on Tern's `PATH`), it says that instead, and Tern's log has the reason and
-   the exact command to run:
+   It runs the `omp` on Tern's `PATH`, or else the omp Tern manages itself. If it can't (usually because neither is
+   there), it says that instead, and Tern's log has the reason and the exact command to run:
 
    <img src="docs/images/toast-extension-failed.png" alt="The error toast omp Usage couldn't set up its omp extension, Tern's log says why, and what to run" width="576">
 
@@ -358,7 +358,7 @@ A few things to know:
 | --- | --- |
 | `tern plugin list` isn't `ready` | It prints the error. Tern's log is at `%LOCALAPPDATA%\Tern\Logs\tern.log` |
 | No line | The focused pane is omp; its provider has limits; omp was restarted after installing; extension statuses are on (step 2); `omp plugin list` shows `omp-usage` enabled (if not, run **omp Usage: Set up omp extension** from the palette), or `extensions:` in `config.yml` names it |
-| `omp Usage couldn't set up its omp extension` | Tern couldn't run `omp plugin`, so omp has to be on the `PATH` Tern started with. Tern's log has omp's reason and the `omp plugin link …` command to run yourself |
+| `omp Usage couldn't set up its omp extension` | Tern couldn't run `omp plugin`: omp has to be on the `PATH` Tern started with, or be the omp Tern manages. Tern's log has omp's reason and the `omp plugin link …` command to run yourself |
 | All/Selected only show the current model, or panes show different numbers | The cache is stale. Restart your omp sessions |
 | The card's reset dates flip between two values | An omp session from before an update is still writing the cache. Restart your omp sessions |
 | The line stopped after an omp or Tern update | omp may have renamed something the plugin reads. Ask omp to fix `omp-usage` |
