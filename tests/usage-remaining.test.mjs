@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { wholeCache } from "./fixtures/harness.mjs";
 
 const run = promisify(execFile);
 const extensionUrl = new URL("../omp/extensions/usage-remaining.js", import.meta.url).href;
@@ -82,7 +83,8 @@ test("CPA Spark quota applies to the Spark model, not an ordinary model or an un
     env: { ...process.env, HOME: home, USERPROFILE: home, OMP_USAGE_SOURCES_FILE: config, CPA_SCOPE_TEST_KEY: "scope-test-key", USAGE_EXTENSION_URL: extensionUrl },
     timeout: 15000,
   });
-  const { cache, status } = JSON.parse(stdout);
+  const { cache: written, status } = JSON.parse(stdout);
+  const cache = wholeCache(written);
   assert.deepEqual(percentages(cache.models["Spark model"].line), [60, 75]);
   assert.deepEqual(percentages(status), [60, 75]);
   assert.deepEqual(percentages(cache.models["Base model"].line), [75]);
@@ -123,7 +125,7 @@ async function nativeCache(t, usage, models) {
     },
     timeout: 15000,
   });
-  return JSON.parse(stdout);
+  return wholeCache(JSON.parse(stdout));
 }
 
 test("omp's own reports name each account's plan for the card and for combining by plan", async (t) => {

@@ -1,0 +1,12 @@
+{
+  "name": "tern-plugin-omp-usage",
+  "private": true,
+  "description": "Development scripts for the omp Usage Tern plugin. Tern loads the plugin from plugin.toml and omp loads the extension from omp/package.json; neither reads this file.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "test:luau": "node tests/luau/run.mjs"
+  }
+}
