@@ -4,20 +4,22 @@
 -- from a mirror of the repo its `upstream` file names, kept in its data directory.
 --
 -- At the interval the user picks (every 6 hours unless changed, or never), an automatic check fetches the upstream.
--- When it has commits that change the plugin (PLUGIN_PATHS: every file but the README, its pictures and the
--- project's notes), it remembers the update as pending, says so in a toast, and every window shows an Update omp
--- Usage button in its widget bar. That button, `omp Usage: Check for updates…` and the settings panel's Check for
--- Updates check again and open the update card: the version that's available and the one you have (from
+-- When it has commits that change the plugin (PLUGIN_PATHS: every file but the README, its pictures, the tests and
+-- the project's notes and tooling), it remembers the update as pending, says so in a toast, and every window shows an
+-- Update omp Usage button in its widget bar. That button, `omp Usage: Check for updates…` and the settings panel's
+-- Check for Updates check again and open the update card: the version that's available and the one you have (from
 -- `plugin.toml` on each side, else commit hashes), Download Update (a clone fast-forwards to the upstream's tip; an
--- installed copy has the tip's files written over it; either way Tern then reloads the plugin), Skip This Version
--- (no automatic toast or button again until a newer commit changes the plugin) and Not Now, over every commit that
--- changes it, in full.
+-- installed copy has the tip's plugin files landed over it, see `land`; either way Tern then reloads the plugin),
+-- Skip This Version (no automatic toast or button again until a newer commit changes the plugin) and Not Now, over
+-- every commit that changes it, in full. How the last check, skip or update went is kept for the settings panel
+-- (`last_outcome`).
 --
 -- An installed copy also has omp load its extension, through omp's plugin manager (extension.luau).
 --
 -- What it remembers lives in `tern.kv`, which every window shares, so one window checks per interval (windows that
 -- tick together claim the check, and the claim that lands last wins), and the pending update, a skipped version and
--- the interval are the same in all of them.
+-- the interval are the same in all of them. Setting up the omp extension and finishing an interrupted update are
+-- claimed the same way.
 
 -- How often the automatic check runs: `hours` nil is never.
 export type Interval = { id: string, label: string, hours: number? }
@@ -25,6 +27,12 @@ export type Interval = { id: string, label: string, hours: number? }
 -- Download Update brings the plugin to), the version its `plugin.toml` says when it says one, and the newest commit
 -- that changes the plugin (what Skip This Version skips: a later push of only the README doesn't bring it back).
 export type Pending = { sha: string, short: string, version: string?, latest: string }
+-- How the last check, skip or update went, for the settings panel. `reason`: "up_to_date", "available" (now pending),
+-- "skipped" (Skip This Version, or an automatic check finding the skipped one), "updated" (Download Update landed),
+-- "diverged" (a clone with local commits; `ok` false) or "failed" (the check failed; `ok` false). `at` is os.time();
+-- `detail` says why in plain words when `ok` is false; `version` names the update (its version, else its commit)
+-- or, for "up_to_date", the version installed.
+export type Outcome = { ok: boolean, at: number, reason: string, detail: string?, version: string? }
 
 type Module = {
 	INTERVALS: { Interval },
@@ -33,6 +41,8 @@ type Module = {
 	version: () -> string?,
 	pending: () -> Pending?,
 	last_checked: () -> number?,
+	last_outcome: () -> Outcome?,
+	landing: () -> string?,
 	check: (cx: WindowCx, manual: boolean) -> (),
 	download: (cx: WindowCx) -> (),
 	applying: () -> string?,
@@ -52,12 +62,19 @@ local DEFAULT_INTERVAL = "6h"
 local KV_EVERY = "omp-usage.update-every" -- an INTERVALS id
 local KV_AUTO = "omp-usage.update-auto" -- 0.2.0's on/off switch: false is read as `off` until an interval is set
 local KV_CHECKED = "omp-usage.update-checked" -- os.time() of the last automatic check, reached or not
-local KV_LAST = "omp-usage.update-last" -- os.time() of the last check that reached the remote
+local KV_LAST = "omp-usage.update-last" -- os.time() of the last check that completed (failures don't count)
+local KV_LAST_OUTCOME = "omp-usage.update-outcome" -- an Outcome
 local KV_PENDING = "omp-usage.update-pending" -- a Pending
 local KV_KEPT = "omp-usage.update-kept" -- the upstream commit the user skipped
 local KV_CLAIM = "omp-usage.update-claim" -- the window that claimed the automatic check
 local KV_APPLYING = "omp-usage.update-applying" -- `{ name, at }`: an update landing, for the settings panels
-
+-- `{ sha, name, at }`: an installed copy's update that started landing and hasn't finished (see `land`)
+local KV_LANDING = "omp-usage.update-landing"
+local KV_LAND_CLAIM = "omp-usage.update-land-claim" -- the window that claimed finishing an interrupted update
+-- `{ sha, name, pid, window, at }`: a clone's fast-forward under way, for the VM a reload starts before it ends
+local KV_MERGING = "omp-usage.update-merging"
+local KV_SETUP_CLAIM = "omp-usage.setup-claim" -- the window that claimed setting up the omp extension
+local KV_SETUP_AT = "omp-usage.setup-at" -- os.time() a window last started setting it up
 local FIRST_CHECK_MS = 20 * 1000 -- after a load, past Tern's own startup work
 local CLAIM_SETTLE_MS = 2000 -- long enough for every window ticking with this one to write its claim
 local TICK_MS = 60 * 60 * 1000 -- how often each window looks whether a check is due: the shortest interval
@@ -68,29 +85,55 @@ local RELOAD_FALLBACK_MS = 5000 -- after an update, how long Tern's folder watch
 local APPLY_WAIT_MS = 1500 -- before an update lands, for every window's once-a-second poll to see it coming
 local APPLYING_STALE_S = 60 -- an announced update that never reloaded this window stops counting
 local LOADED_AT = os.time() -- when this VM started: an update announced before it has already landed here
+local MERGE_TIMEOUT_MS = 30000 -- a clone's fast-forward that takes longer is stopped
+local MERGE_STALE_S = 120 -- a fast-forward whose end never came (its VM went) stops counting
+local RESUME_MS = 500 -- after a load, before finishing an update a reload or restart interrupted
+local SETUP_FRESH_S = 60 -- a window loading this soon after another set up the omp extension leaves it
 -- No credential prompts or windows: a remote that needs them fails the check instead.
 local GIT_ENV = { GIT_TERMINAL_PROMPT = "0", GCM_INTERACTIVE = "never" }
 local UPDATE_ACTION = "plugin." .. tern.plugin.id .. ".update"
--- What an update covers: every file but the README, its pictures and the project's own notes. The omp extension
--- (`omp/`) is one of them.
+-- What an update covers: every file but the README, its pictures, the tests and the project's own notes and
+-- tooling. The omp extension (`omp/`) is one of them.
 local EXTENSION_DIR = "omp"
-local PLUGIN_PATHS = { "--", ":/", ":(top,exclude)README.md", ":(top,exclude)docs", ":(top,exclude).omp" }
+local PLUGIN_PATHS = {
+	"--",
+	":/",
+	":(top,exclude)README.md",
+	":(top,exclude)docs",
+	":(top,exclude).omp",
+	":(top,exclude).github",
+	":(top,exclude)package.json",
+	":(top,exclude)tests",
+}
+-- What an installed copy's update writes: the same files but for the `upstream` file (the copy's own names where the
+-- user wants updates from). The old `omp-usage` folder is gone from the repo, so copies that still have it lose it
+-- with the other files the history deleted.
+local LAND_PATHS = table.clone(PLUGIN_PATHS)
+table.insert(LAND_PATHS, ":(top,exclude)upstream")
 -- An installed copy's mirror, and the ref there that follows the upstream's default branch, the only one fetched.
 local MIRROR = tern.plugin.data .. "/source"
 local MIRROR_TIP = "refs/upstream"
 -- The file naming an installed copy's upstream, where a fork names itself: Tern keeps no record of where it
 -- installed a copy from, and plugin.toml takes no such field. Updates leave the copy's own file as it is.
 local UPSTREAM_FILE = "upstream"
--- git's output for one `cat-file --batch`: a process's stdout stops at 16 MiB, so an update's files come in batches
--- of about this much, and a single file can't be bigger than BLOB_MAX.
-local BATCH_BYTES = 4 * 1024 * 1024
-local BLOB_MAX = 16 * 1024 * 1024 - 1024
+-- Where an installed copy's update is staged before it's copied in (see `land`): one folder per landing VM, under
+-- the plugin's data directory, which Tern doesn't watch.
+local STAGING = tern.plugin.data .. "/staging"
+local STAGED_MAX = 16 * 1024 * 1024 -- the biggest plugin file an update copies
+local STAGE_STALE_S = 10 * 60 -- a staging folder this old was left by a VM that went: no landing takes that long
+-- git writes files as they are in the repository (LF), whatever the user's line-ending settings say.
+local CHECKOUT_CONFIG = { "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.symlinks=false" }
+-- Plugin files an update copies first and last: the updater before anything else, so a copy left part-way can still
+-- finish the job, and plugin.toml last, so the copy never says it's the new version before everything else is.
+local COPY_FIRST = { ["update.luau"] = 1, ["extension.luau"] = 2 }
+local COPY_LAST = "plugin.toml"
 -- Has omp load the extension (extension.luau).
 local extension = require("./extension")
 local KV_INSTALLED = "omp-usage.installed" -- `{ sha, version }`: the commit an installed copy last wrote
 local SETUP_MS = 3000 -- after a load, before an installed copy sets up the omp extension
 
-type Git = { ok: boolean, out: string, err: string }
+-- `status` is git's exit code, -1 when it was stopped and -2 when it didn't start.
+type Git = { ok: boolean, status: number, out: string, err: string }
 type Commit = { sha: string, short: string, when: string, author: string, subject: string, body: string }
 -- What a check found: the commits between HEAD and the upstream that change the plugin, newest first (`behind` of
 -- them, `other` commits besides that don't), the upstream's tip, and both sides' versions.
@@ -122,6 +165,13 @@ local function plural(n: number, word: string): string
 	return tostring(n) .. " " .. word .. (if n == 1 then "" else "s")
 end
 
+-- A token no other VM makes at the same moment: windows that start the same thing at once (a claim, a staging
+-- folder) tell theirs apart by it. Each part alone can repeat across VMs (a fresh VM's clock, its random seed).
+local function unique(): string
+	local address = string.match(tostring({}), "(%x+)$") or ""
+	return string.format("%d.%d.%s.%d", math.floor(tern.now() * 1000), math.floor(os.clock() * 1000000), address, math.random(1, 1073741824))
+end
+
 -- The `version = "…"` of a plugin.toml's text.
 local function toml_version(text: string): string?
 	local version = string.match("\n" .. text, '\n%s*version%s*=%s*"([^"\n]+)"')
@@ -144,21 +194,28 @@ local function reason(text: string): string
 	return fallback or "git failed"
 end
 
--- Runs git in `dir`; `done` gets a fresh cx when the window gave one, else `cx`.
-local function git(cx: WindowCx, dir: string, args: { string }, timeout_ms: number, done: (Git, WindowCx) -> (), stdin: string?)
+-- Runs git in `dir`, with `env` added to GIT_ENV; `done` gets a fresh cx when the window gave one, else `cx`.
+local function git(cx: WindowCx, dir: string, args: { string }, timeout_ms: number, done: (Git, WindowCx) -> (), env: { [string]: string }?)
 	local argv = { "git" }
 	for _, arg in args do
 		table.insert(argv, arg)
 	end
-	local opts = { cwd = dir, env = GIT_ENV, timeout_ms = timeout_ms, stdin = stdin }
+	local vars = GIT_ENV
+	if env then
+		vars = table.clone(GIT_ENV)
+		for name, value in env do
+			vars[name] = value
+		end
+	end
+	local opts = { cwd = dir, env = vars, timeout_ms = timeout_ms }
 	local started, err = pcall(function()
 		tern.process.run(argv, opts, function(result: ProcessResult, later: WindowCx?)
 			local failure = if result.timed_out then "git took too long" else result.stderr
-			done({ ok = result.status == 0, out = result.stdout, err = failure }, later or cx)
+			done({ ok = result.status == 0, status = result.status, out = result.stdout, err = failure }, later or cx)
 		end)
 	end)
 	if not started then
-		done({ ok = false, out = "", err = "git didn't start: " .. tostring(err) }, cx)
+		done({ ok = false, status = -2, out = "", err = "git didn't start: " .. tostring(err) }, cx)
 	end
 end
 
@@ -212,6 +269,12 @@ local function prepare(cx: WindowCx, fetch: boolean, done: (Source?, Failure?, W
 		end)
 		return
 	end
+	-- an update that hasn't finished landing: its plugin.toml may already say the new version, so nothing judges the
+	-- copy until `resume` finishes it
+	if type(kv_get(KV_LANDING)) == "table" then
+		fail(cx, "omp Usage is finishing an update", "Check again once it's done")
+		return
+	end
 	-- read now, not `M.version()`'s as of load: between an update's writes and the reload they bring, this VM still
 	-- runs, and with the old version it would take the copy for the old commit and offer the update again
 	local read, text = pcall(tern.fs.read, "plugin.toml", 64 * 1024)
@@ -249,23 +312,39 @@ local function prepare(cx: WindowCx, fetch: boolean, done: (Source?, Failure?, W
 				end)
 			end)
 		end
-		if tern.fs.exists(MIRROR .. "/" .. MIRROR_TIP) then
-			if always then
-				fetch_tip(at)
-			else
-				then_(at, false)
-			end
+		local function clone(at1: WindowCx)
+			pcall(tern.fs.remove, MIRROR) -- a clone cut short, or no repository at all
+			pcall(tern.fs.mkdir, tern.plugin.data)
+			local clone_args = { "clone", "--bare", "--single-branch", "--quiet", repository, MIRROR }
+			git(at1, tern.plugin.data, clone_args, 120000, function(cloned: Git, at2: WindowCx)
+				if cloned.ok then
+					fetch_tip(at2)
+				else
+					pcall(tern.fs.remove, MIRROR)
+					fail(at2, "omp Usage couldn't download its repository", reason(cloned.err), true)
+				end
+			end)
+		end
+		if not tern.fs.exists(MIRROR) then
+			clone(at)
 			return
 		end
-		pcall(tern.fs.remove, MIRROR) -- a clone cut short
-		pcall(tern.fs.mkdir, tern.plugin.data)
-		local clone_args = { "clone", "--bare", "--single-branch", "--quiet", repository, MIRROR }
-		git(at, tern.plugin.data, clone_args, 120000, function(clone: Git, at1: WindowCx)
-			if clone.ok then
-				fetch_tip(at1)
+		-- Asks git for the tip rather than looking for its file: `git gc` packs refs, and a packed ref has none.
+		-- `--git-dir=.`: a mirror that isn't a repository any more mustn't find one in a folder above it.
+		local probe = { "--git-dir=.", "rev-parse", "--verify", "--quiet", MIRROR_TIP }
+		git(at, MIRROR, probe, 10000, function(tip: Git, at1: WindowCx)
+			if tip.ok then
+				if always then
+					fetch_tip(at1)
+				else
+					then_(at1, false)
+				end
+			elseif tip.status == 1 then
+				fetch_tip(at1) -- a repository without the tip (a fetch cut short): fetching brings it
+			elseif tip.status == -2 or tip.status == -1 then
+				fail(at1, "omp Usage can't check for updates", reason(tip.err)) -- git, not the mirror, is the trouble
 			else
-				pcall(tern.fs.remove, MIRROR)
-				fail(at1, "omp Usage couldn't download its repository", reason(clone.err), true)
+				clone(at1) -- not a repository: a clone cut short
 			end
 		end)
 	end
@@ -328,122 +407,263 @@ local function prepare(cx: WindowCx, fetch: boolean, done: (Source?, Failure?, W
 	sync(cx, fetch, resolve)
 end
 
--- A file of an installed copy's update and its size in bytes.
-type Entry = { path: string, size: number }
+-- An installed copy's update, landed so that no failure, reload or restart leaves the copy a mix of two versions that
+-- passes for either:
+-- 1. KV_LANDING names the commit before anything changes, and goes only once all of it has landed. While it's
+--    there, no check judges the copy (its plugin.toml may already say the new version), and a VM that loads with it
+--    set lands that commit again (`finish_staged` at once, else `resume`).
+-- 2. git checks the commit's plugin files (LAND_PATHS) out into a staging folder in the plugin's data directory,
+--    which Tern doesn't watch: a process of its own, so no budget stops it halfway, and the copy doesn't change yet.
+--    The marker then names the folder and what's in it.
+-- 3. One callback copies them in (`copy_in`). Tern's folder watch reloads the plugin once it's done. A failure
+--    part-way leaves the marker and the staging folder, and the VM that loads next copies the rest in from there
+--    before the rest of the plugin loads, so the mix never runs.
+-- The README, pictures and tests aren't plugin files: it leaves them.
 
--- The contents of `<rev>:<path>` for each file, from `git cat-file --batch` in batches of about BATCH_BYTES, so no
--- answer reaches a process's 16 MiB cap on output. `done` gets why when a file didn't come through whole.
-local function blobs(cx: WindowCx, src: Source, rev: string, files: { Entry }, done: ({ [string]: string }?, string?, WindowCx) -> ())
-	local batches: { { Entry } } = {}
-	local batch: { Entry } = {}
-	local bytes = 0
-	for _, file in files do
-		if file.size > BLOB_MAX then
-			done(nil, file.path .. " is too big for an update to write", cx)
-			return
-		end
-		if #batch > 0 and bytes + file.size > BATCH_BYTES then
-			table.insert(batches, batch)
-			batch, bytes = {}, 0
-		end
-		table.insert(batch, file)
-		bytes += file.size
+-- Copies the staged `files` from `tree` over the copy, each only when its contents differ (so a second try picks up
+-- where the first stopped), the updater first and plugin.toml last, then deletes `gone`: the plugin files the
+-- repository's history once had that the update doesn't, whichever commit the copy came from (files the history never
+-- had are the user's and stay). Returns why it failed, whether it changed anything, whether the omp extension's files
+-- changed, and the version the update's plugin.toml says.
+local function copy_in(tree: string, files: { string }, gone: { string }): (string?, boolean, boolean, string?)
+	local ordered = table.clone(files)
+	local function rank(path: string): number
+		return if path == COPY_LAST then 1000 else COPY_FIRST[path] or 100
 	end
-	if #batch > 0 then
-		table.insert(batches, batch)
+	table.sort(ordered, function(a: string, b: string): boolean
+		local ra, rb = rank(a), rank(b)
+		return if ra ~= rb then ra < rb else a < b
+	end)
+	local function is_extension(path: string): boolean
+		return string.sub(path, 1, #EXTENSION_DIR + 1) == EXTENSION_DIR .. "/"
 	end
-	local out: { [string]: string } = {}
-	local function fetch_batch(i: number, at: WindowCx)
-		local current = batches[i]
-		if current == nil then
-			done(out, nil, at)
-			return
-		end
-		local requests: { string } = {}
-		for _, file in current do
-			table.insert(requests, rev .. ":" .. file.path)
-		end
-		git(at, src.dir, { "cat-file", "--batch" }, 20000, function(answer: Git, at1: WindowCx)
-			if not answer.ok then
-				done(nil, reason(answer.err), at1)
-				return
+	local dir = tern.plugin.dir
+	local touched, extension_changed = false, false
+	local version: string? = nil
+	local copied, failure = pcall(function()
+		for _, path in ordered do
+			local text = tern.fs.read(tree .. "/" .. path, STAGED_MAX)
+			if path == COPY_LAST then
+				version = toml_version(text)
 			end
-			-- each answer: `<oid> blob <size>\n<content>\n`, or `<request> missing\n`
-			local pos = 1
-			for _, file in current do
-				local eol = string.find(answer.out, "\n", pos, true)
-				local header = if eol then string.sub(answer.out, pos, eol - 1) else ""
-				local size = tonumber(string.match(header, "^%x+ blob (%d+)$") or "")
-				if eol == nil or size == nil or size ~= file.size or eol + size > #answer.out then
-					done(nil, "git didn't give " .. file.path, at1)
-					return
+			local read, current = pcall(tern.fs.read, dir .. "/" .. path, STAGED_MAX)
+			if not read or current ~= text then
+				touched = true
+				local parent = string.match(path, "^(.*)/[^/]*$")
+				if parent then
+					tern.fs.mkdir(dir .. "/" .. parent)
 				end
-				out[file.path] = string.sub(answer.out, eol + 1, eol + size)
-				pos = eol + size + 2
+				tern.fs.write(dir .. "/" .. path, text)
+				extension_changed = extension_changed or is_extension(path)
 			end
-			fetch_batch(i + 1, at1)
-		end, table.concat(requests, "\n") .. "\n")
-	end
-	fetch_batch(1, cx)
+		end
+		for _, path in gone do
+			if tern.fs.exists(dir .. "/" .. path) then
+				touched = true
+				tern.fs.remove(dir .. "/" .. path)
+				extension_changed = extension_changed or is_extension(path)
+			end
+		end
+		-- the folders those deletions left empty (the old `omp-usage` one), never one with anything left in it
+		for _, path in gone do
+			local parent = string.match(path, "^(.*)/[^/]*$")
+			while parent do
+				local full = dir .. "/" .. parent
+				if not tern.fs.exists(full) or #tern.fs.list(full) > 0 then
+					break
+				end
+				tern.fs.remove(full)
+				parent = string.match(parent, "^(.*)/[^/]*$")
+			end
+		end
+	end)
+	return if copied then nil else tostring(failure), touched, extension_changed, version
 end
 
--- An installed copy's update: the repo's files as of `sha` written over the copy (those `sha` dropped deleted),
--- the omp extension among them, which omp's plugin link points at. The copy's `upstream` file stays as it is: it
--- names where the user wants updates from. All the writes happen in one go, so a reload Tern starts on the first
--- change finds them all. `done` gets why when nothing was written.
-local function land(cx: WindowCx, src: Source, sha: string, done: (string?, WindowCx) -> ())
-	local function names(text: string): { string }
-		local out: { string } = {}
-		for _, name in string.split(text, "\0") do
-			if name ~= "" and name ~= UPSTREAM_FILE then
-				table.insert(out, name)
+-- Whether landing `files` and deleting `gone` changes the omp extension's files in the copy, worked out before any
+-- of it is written, so an update a failure cut short still says so when the next load finishes it.
+local function extension_differs(tree: string, files: { string }, gone: { string }): boolean
+	local prefix = EXTENSION_DIR .. "/"
+	local dir = tern.plugin.dir
+	for _, path in files do
+		if string.sub(path, 1, #prefix) == prefix then
+			local ok, current = pcall(tern.fs.read, dir .. "/" .. path, STAGED_MAX)
+			local staged_ok, text = pcall(tern.fs.read, tree .. "/" .. path, STAGED_MAX)
+			if not ok or not staged_ok or current ~= text then
+				return true
 			end
+		end
+	end
+	for _, path in gone do
+		if string.sub(path, 1, #prefix) == prefix and tern.fs.exists(dir .. "/" .. path) then
+			return true
+		end
+	end
+	return false
+end
+
+-- A list from `tern.kv` (its tables have a protected metatable) as a plain list of strings, nil when it isn't one.
+local function strings(value: any): { string }?
+	if type(value) ~= "table" then
+		return nil
+	end
+	local out: { string } = {}
+	for _, item in ipairs(value) do
+		if type(item) ~= "string" then
+			return nil
+		end
+		table.insert(out, item)
+	end
+	return out
+end
+
+-- Removes staging folders older than STAGE_STALE_S (a VM a reload or restart ended left them, or a removal failed),
+-- but `keep`, the one a landing marker still names.
+local function prune_staging(keep: string?)
+	local listed_ok, entries = pcall(tern.fs.list, STAGING)
+	if not listed_ok then
+		return
+	end
+	local kept = if keep then string.match(keep, "([^/\\]+)[/\\]*$") else nil
+	for _, entry in entries do
+		local born = tonumber(string.match(entry, "^(%d+)%-") or "")
+		if born and entry ~= kept and os.time() - born > STAGE_STALE_S then
+			pcall(tern.fs.remove, STAGING .. "/" .. entry)
+		end
+	end
+end
+
+-- `resuming`: the marker was there already (an earlier try may have changed files), so a failure keeps it. `done`
+-- gets why it didn't land, and whether the omp extension's files changed.
+local function land(cx: WindowCx, sha: string, name: string, resuming: boolean, done: (string?, boolean, WindowCx) -> ())
+	kv_set(KV_LANDING, { sha = sha, name = name, at = os.time() })
+	-- a folder of its own: windows finishing the same update at once don't trip over each other
+	local stage = STAGING .. "/" .. tostring(os.time()) .. "-" .. unique()
+	local tree = stage .. "/tree"
+	local touched = false -- whether the copy changed yet: then the staging folder stays for the next load
+	local function finish(err: string?, extension_changed: boolean, at: WindowCx)
+		if err == nil or not touched then
+			pcall(tern.fs.remove, stage)
+		end
+		if err and not touched and not resuming then
+			kv_set(KV_LANDING, nil) -- nothing changed: there's nothing to finish
+		end
+		done(err, extension_changed, at)
+	end
+	prune_staging(nil) -- this try stages afresh, so an earlier try's folder isn't needed
+	if not pcall(tern.fs.mkdir, tree) then
+		finish("Couldn't make a staging folder in " .. STAGING, false, cx)
+		return
+	end
+	-- the index lives in the staging folder too: the mirror's own, and the copy, stay as they are
+	local index = { GIT_INDEX_FILE = stage .. "/index" }
+	local function staged(args: { string }): { string }
+		local out = { "--git-dir=" .. MIRROR, "--work-tree=" .. tree }
+		for _, arg in CHECKOUT_CONFIG do
+			table.insert(out, arg)
+		end
+		for _, arg in args do
+			table.insert(out, arg)
 		end
 		return out
 	end
-	-- `-l` records: `<mode> blob <oid> <size>\t<path>`
-	git(cx, src.dir, { "ls-tree", "-r", "-z", "-l", sha }, 10000, function(tree: Git, cx1: WindowCx)
-		local files: { Entry } = {}
-		for _, record in string.split(tree.out, "\0") do
-			local size, path = string.match(record, "^%d+ blob %x+%s+(%d+)\t(.+)$")
-			if size and path and path ~= UPSTREAM_FILE then
-				table.insert(files, { path = path, size = tonumber(size) :: number })
-			end
-		end
-		if not tree.ok or #files == 0 then
-			done(if tree.ok then "The update has no plugin files" else reason(tree.err), cx1)
+	local checkout = staged({ "checkout", "--force", sha })
+	for _, path in LAND_PATHS do
+		table.insert(checkout, path)
+	end
+	git(cx, tree, checkout, 60000, function(out: Git, cx1: WindowCx)
+		if not out.ok then
+			finish(reason(out.err), false, cx1)
 			return
 		end
-		local diff_args = { "diff", "--name-only", "-z", "--diff-filter=D", src.head, sha }
-		git(cx1, src.dir, diff_args, 10000, function(diff: Git, cx2: WindowCx)
-			local gone: { string } = if diff.ok then names(diff.out) else {}
-			blobs(cx2, src, sha, files, function(found: { [string]: string }?, err: string?, cx3: WindowCx)
-				if found == nil then
-					done(err or "git didn't give the update's files", cx3)
+		git(cx1, tree, staged({ "ls-files", "-z" }), 10000, function(listed: Git, cx2: WindowCx)
+			local files: { string } = {}
+			local have: { [string]: boolean } = {} -- each file, and each folder one is in
+			for _, path in string.split(listed.out, "\0") do
+				if path ~= "" then
+					table.insert(files, path)
+					have[path] = true
+					local parent = string.match(path, "^(.*)/[^/]*$")
+					while parent do
+						have[parent] = true
+						parent = string.match(parent, "^(.*)/[^/]*$")
+					end
+				end
+			end
+			if not listed.ok or #files == 0 then
+				finish(if listed.ok then "The update has no plugin files" else reason(listed.err), false, cx2)
+				return
+			end
+			-- every plugin file a commit up to `sha` deleted (a rename counts as one)
+			local removed = { "log", "--no-renames", "--diff-filter=D", "--name-only", "-z", "--format=", sha }
+			for _, path in LAND_PATHS do
+				table.insert(removed, path)
+			end
+			git(cx2, MIRROR, removed, 20000, function(history: Git, cx3: WindowCx)
+				if not history.ok then
+					finish(reason(history.err), false, cx3)
 					return
 				end
-				local dir = tern.plugin.dir
-				local wrote, failure = pcall(function()
-					for _, file in gone do
-						pcall(tern.fs.remove, dir .. "/" .. file)
+				local gone: { string } = {}
+				local seen: { [string]: boolean } = {}
+				for _, piece in string.split(history.out, "\0") do
+					local path = trim(piece)
+					if path ~= "" and not have[path] and not seen[path] then
+						seen[path] = true
+						table.insert(gone, path)
 					end
-					for _, file in files do
-						local parent = string.match(file.path, "^(.*)/[^/]*$")
-						if parent then
-							tern.fs.mkdir(dir .. "/" .. parent)
-						end
-						tern.fs.write(dir .. "/" .. file.path, found[file.path])
-					end
-				end)
-				if not wrote then
-					done(tostring(failure), cx3)
+				end
+				local extension = extension_differs(tree, files, gone)
+				kv_set(KV_LANDING, { sha = sha, name = name, at = os.time(), stage = stage, files = files, gone = gone, extension = extension })
+				local err, changed, extension_changed, version = copy_in(tree, files, gone)
+				touched = changed
+				if err then
+					finish(err, extension or extension_changed, cx3)
 					return
 				end
-				kv_set(KV_INSTALLED, { sha = sha, version = toml_version(found["plugin.toml"] or "") })
-				done(nil, cx3)
+				kv_set(KV_INSTALLED, { sha = sha, version = version })
+				kv_set(KV_LANDING, nil)
+				finish(nil, extension or extension_changed, cx3)
 			end)
-		end)
-	end)
+		end, index)
+	end, index)
+end
+
+-- At load, before the rest of the plugin loads (window.luau requires this module first): an update whose copy a
+-- failure cut short is finished from the staging folder it left, so the mix of old and new files never runs. What
+-- it finished, for the window to say once it's there (see the end of this file).
+local staged_landed: { name: string, extension: boolean }? = nil
+local function finish_staged()
+	local marker = kv_get(KV_LANDING)
+	if not INSTALLED or type(marker) ~= "table" or type(marker.sha) ~= "string" or type(marker.stage) ~= "string" then
+		return
+	end
+	local files, gone = strings(marker.files), strings(marker.gone)
+	local tree = marker.stage .. "/tree"
+	if files == nil or gone == nil or #files == 0 or not tern.fs.exists(tree) then
+		return -- `resume` lands it again
+	end
+	local name: string = if type(marker.name) == "string" then marker.name else string.sub(marker.sha, 1, 7)
+	local err, changed, extension_changed, version = copy_in(tree, files :: { string }, gone :: { string })
+	if err then
+		tern.log.warn("omp-usage couldn't finish updating to " .. name .. " at load: " .. err)
+		return
+	end
+	kv_set(KV_INSTALLED, { sha = marker.sha, version = version })
+	kv_set(KV_LANDING, nil)
+	-- as `updated` does, which comes later in this file
+	kv_set(KV_KEPT, nil)
+	kv_set(KV_PENDING, nil)
+	kv_set(KV_LAST_OUTCOME, { ok = true, at = os.time(), reason = "updated", version = name })
+	pcall(tern.fs.remove, marker.stage)
+	if changed or marker.extension == true then
+		staged_landed = { name = name, extension = marker.extension == true or extension_changed }
+	end
+end
+finish_staged()
+if INSTALLED then
+	local marker = kv_get(KV_LANDING)
+	prune_staging(if type(marker) == "table" and type(marker.stage) == "string" then marker.stage else nil)
 end
 
 -- The web page of a remote (`https://host/owner/repo`) from its fetch URL: https with or without a user, scp-like
@@ -529,9 +749,38 @@ function M.pending(): Pending?
 	return nil
 end
 
+-- When the last check that completed ran, in any window (one that failed or found a diverged clone doesn't count).
 function M.last_checked(): number?
 	local value = kv_get(KV_LAST)
 	return if type(value) == "number" then value else nil
+end
+
+function M.last_outcome(): Outcome?
+	local value = kv_get(KV_LAST_OUTCOME)
+	if type(value) == "table" and type(value.ok) == "boolean" and type(value.at) == "number" and type(value.reason) == "string" then
+		return {
+			ok = value.ok,
+			at = value.at,
+			reason = value.reason,
+			detail = if type(value.detail) == "string" then value.detail else nil,
+			version = if type(value.version) == "string" then value.version else nil,
+		}
+	end
+	return nil
+end
+
+local function record(ok: boolean, reason_code: string, detail: string?, version: string?)
+	kv_set(KV_LAST_OUTCOME, { ok = ok, at = os.time(), reason = reason_code, detail = detail, version = version })
+end
+
+-- The name of an installed copy's update that started landing and hasn't finished (see `land`), nil when none.
+-- Until it has, the copy is no version in particular: say it's finishing an update, never that it's up to date.
+function M.landing(): string?
+	local value = kv_get(KV_LANDING)
+	if type(value) == "table" and type(value.sha) == "string" then
+		return if type(value.name) == "string" then value.name else string.sub(value.sha, 1, 7)
+	end
+	return nil
 end
 
 -- What an update is called: its version when plugin.toml moved, else its commit.
@@ -574,6 +823,85 @@ end
 
 local busy = false -- a check is under way in this window
 
+local function window_of(cx: WindowCx): string
+	local ok, key = pcall(function()
+		return cx:window_key()
+	end)
+	return if ok then tostring(key) else ""
+end
+
+-- One window of those that start the same thing together (they loaded together, or tick together) goes ahead:
+-- each writes its claim to `key`, and only the one whose claim is still there CLAIM_SETTLE_MS later runs `go`.
+local function claim(cx: WindowCx, key: string, go: (WindowCx) -> ())
+	local mine = window_of(cx) .. "@" .. unique()
+	kv_set(key, mine)
+	tern.timer(CLAIM_SETTLE_MS, function(later: WindowCx?)
+		if later and kv_get(key) == mine then
+			go(later)
+		end
+	end)
+end
+
+-- An update to `name` is in: nothing is pending or skipped any more.
+local function updated(name: string)
+	kv_set(KV_KEPT, nil)
+	set_pending(nil)
+	record(true, "updated", nil, name)
+end
+
+local function updated_note(extension: boolean): string?
+	return if extension then "The omp extension changed: restart omp sessions" else nil
+end
+
+-- Tern watches the plugin's folder and reloads this window's plugins when an update changes it. Only if that didn't
+-- happen (this VM, which a reload replaces, is still here) ask for Reload plugins, which also empties every plugin
+-- canvas left open (the settings panel) until it's opened again.
+local function reload_soon()
+	tern.timer(RELOAD_FALLBACK_MS, function(last: WindowCx?)
+		if last then
+			pcall(function()
+				last:command("reload_plugins")
+			end)
+		end
+	end)
+end
+
+-- Finishes an installed copy's update that a reload, a restart or a failure cut short (see `land`). `loud`: say
+-- how it went either way (a load, or the user asked); else only a success.
+local function resume(cx: WindowCx, loud: boolean)
+	local marker = kv_get(KV_LANDING)
+	if not INSTALLED or type(marker) ~= "table" or type(marker.sha) ~= "string" then
+		return
+	end
+	if busy then
+		if loud then
+			cx:toast("info", "omp Usage is already checking or updating")
+		end
+		return
+	end
+	if not tern.fs.exists(MIRROR) then
+		-- nothing to land it from. plugin.toml goes last, so a copy cut short still says its old version, and the
+		-- next check, cloning the mirror again, offers the update again
+		kv_set(KV_LANDING, nil)
+		return
+	end
+	busy = true
+	local name: string = if type(marker.name) == "string" then marker.name else string.sub(marker.sha, 1, 7)
+	land(cx, marker.sha, name, true, function(err: string?, extension: boolean, at: WindowCx)
+		busy = false
+		if err then
+			tern.log.warn("omp-usage couldn't finish updating to " .. name .. ": " .. err)
+			if loud then
+				at:toast("error", "omp Usage couldn't finish updating to " .. name, err)
+			end
+			return
+		end
+		updated(name)
+		at:toast("success", "omp Usage finished updating to " .. name, updated_note(extension))
+		reload_soon()
+	end)
+end
+
 -- An update about to land, for every window's settings panel (window.luau): its name, from when it's announced
 -- until this window's plugin reloads (or the update fails). The plugin's style sheets go away while Tern reloads it,
 -- so a panel left as it is would flash unstyled buttons; told in time, each window swaps its panel for an
@@ -590,6 +918,10 @@ function M.applying(): string?
 end
 
 local function apply(cx: WindowCx, pending: Pending)
+	if M.landing() then
+		resume(cx, true) -- the copy is mid-update: finish that first
+		return
+	end
 	if busy then
 		cx:toast("info", "omp Usage is already checking or updating")
 		return
@@ -607,50 +939,142 @@ local function apply(cx: WindowCx, pending: Pending)
 		local function landed(at: WindowCx, extension: boolean)
 			busy = false
 			-- KV_APPLYING stays: the reloaded VMs ignore it, and until then the panels wait
-			kv_set(KV_KEPT, nil)
-			set_pending(nil)
-			local sub = if extension then "The omp extension changed: restart omp sessions" else nil
-			at:toast("success", "omp Usage updated to " .. name, sub)
-			-- Tern watches the plugin's folder and reloads this window's plugins when the update changes it. Only
-			-- if that didn't happen (this VM, which a reload replaces, is still here) ask for Reload plugins, which
-			-- also empties every plugin canvas left open (the settings panel) until it's opened again.
-			tern.timer(RELOAD_FALLBACK_MS, function(last: WindowCx?)
-				if last then
-					pcall(function()
-						last:command("reload_plugins")
-					end)
+			updated(name)
+			at:toast("success", "omp Usage updated to " .. name, updated_note(extension))
+			reload_soon()
+		end
+		local at0 = later or cx
+		if INSTALLED then
+			-- the check that found the update brought the mirror up to date
+			land(at0, pending.sha, name, false, function(err: string?, extension: boolean, at: WindowCx)
+				if err then
+					failed(at, err)
+				else
+					landed(at, extension)
 				end
 			end)
+			return
 		end
-		prepare(later or cx, false, function(src: Source?, failure: Failure?, cx1: WindowCx)
-			if src == nil then
-				failed(cx1, if failure then failure.detail else "No update source")
-				return
-			end
-			-- Whether the omp extension changed: omp loads it at session start, so open sessions need a restart.
-			git(cx1, src.dir, { "diff", "--name-only", src.head, pending.sha }, 10000, function(diff: Git, cx2: WindowCx)
-				local extension = diff.ok and string.find("\n" .. diff.out, "\n" .. EXTENSION_DIR .. "/") ~= nil
-				if src.installed then
-					land(cx2, src, pending.sha, function(err: string?, cx3: WindowCx)
-						if err then
-							failed(cx3, err)
-						else
-							landed(cx3, extension)
-						end
-					end)
+		local dir = tern.plugin.dir
+		-- Whether the omp extension changed: omp loads it at session start, so open sessions need a restart.
+		git(at0, dir, { "diff", "--name-only", "HEAD", pending.sha }, 10000, function(diff: Git, cx2: WindowCx)
+			local extension = diff.ok and string.find("\n" .. diff.out, "\n" .. EXTENSION_DIR .. "/") ~= nil
+			-- Started with `spawn` for its pid: the fast-forward changes the folder Tern watches, and if the reload
+			-- that brings ends this VM first, its end comes to the new VM as a `process_exit` (see `reconcile`).
+			local ended = false
+			local stopped = false
+			local function finish(status: number, stderr: string, at: WindowCx)
+				if ended then
 					return
 				end
-				git(cx2, src.dir, { "merge", "--ff-only", "--quiet", pending.sha }, 30000, function(merge: Git, cx3: WindowCx)
-					if merge.ok then
-						landed(cx3, extension)
-					else
-						failed(cx3, reason(merge.err))
-					end
-				end)
+				ended = true
+				kv_set(KV_MERGING, nil)
+				if status == 0 then
+					landed(at, extension)
+				else
+					failed(at, if stopped then "git took too long" else reason(stderr))
+				end
+			end
+			local argv = { "git", "merge", "--ff-only", "--quiet", pending.sha }
+			local started, child = pcall(tern.process.spawn, argv, {
+				cwd = dir,
+				env = GIT_ENV,
+				exit = function(result: SpawnExit, at: WindowCx?)
+					finish(result.status, result.stderr, at or cx2)
+				end,
+			})
+			if not started then
+				failed(cx2, "git didn't start: " .. tostring(child))
+				return
+			end
+			local merge = child :: Child
+			kv_set(KV_MERGING, {
+				sha = pending.sha,
+				name = name,
+				pid = merge.pid,
+				window = window_of(cx2),
+				extension = extension,
+				at = os.time(),
+			})
+			tern.timer(MERGE_TIMEOUT_MS, function(_later: WindowCx?)
+				if not ended then
+					stopped = true
+					pcall(function()
+						merge:kill()
+					end)
+				end
 			end)
 		end)
 	end)
 end
+
+-- A linked clone, at load and when a child of the VM before it ends: a pending update the clone already has goes
+-- (pulled by hand, or a fast-forward whose end went with the VM a reload replaced), and that fast-forward's end, if
+-- it's this one, gets its say. `exit`: the child that ended; nil at load.
+local function reconcile(cx: WindowCx, exit: ProcessExitEvent?)
+	if INSTALLED then
+		return
+	end
+	local function merging_now(): any
+		local value = kv_get(KV_MERGING)
+		return if type(value) == "table" and type(value.sha) == "string" then value else nil
+	end
+	local function say(merging: any, at: WindowCx)
+		local name: string = if type(merging.name) == "string" then merging.name else string.sub(merging.sha, 1, 7)
+		updated(name)
+		if merging.window == window_of(at) then
+			at:toast("success", "omp Usage updated to " .. name, updated_note(merging.extension == true))
+		end
+	end
+	local merging = merging_now()
+	if exit then
+		if merging == nil or merging.pid ~= exit.pid then
+			return
+		end
+		kv_set(KV_MERGING, nil)
+		if exit.status == 0 then
+			say(merging, cx)
+		else
+			kv_set(KV_APPLYING, nil)
+			if merging.window == window_of(cx) then
+				local why = if exit.timed_out then "git took too long" else reason(exit.stderr)
+				cx:toast("error", "omp Usage didn't update", why)
+			end
+		end
+		return
+	end
+	local pending = M.pending()
+	local target: string? = if merging then merging.sha elseif pending then pending.sha else nil
+	if target == nil then
+		return
+	end
+	git(cx, tern.plugin.dir, { "merge-base", "--is-ancestor", target :: string, "HEAD" }, 10000, function(has: Git, at: WindowCx)
+		local still = merging_now()
+		if merging then
+			-- the `process_exit` may have come meanwhile and said it all
+			if still == nil or still.pid ~= merging.pid then
+				return
+			end
+			if has.ok then
+				kv_set(KV_MERGING, nil)
+				say(merging, at)
+			elseif type(merging.at) ~= "number" or os.time() - merging.at > MERGE_STALE_S or merging.at > os.time() then
+				kv_set(KV_MERGING, nil) -- its end never came
+			end
+			return
+		end
+		local now = M.pending()
+		if has.ok and now and now.sha == target then
+			set_pending(nil)
+		end
+	end)
+end
+
+tern.on("process_exit", function(ev: ProcessExitEvent, cx: WindowCx?)
+	if cx then
+		reconcile(cx, ev)
+	end
+end)
 
 -- The update card: a canvas beside the focused pane, headed by the version that's available and the one you have,
 -- with Download Update, Skip This Version and Not Now in its bottom bar and every new commit in full beneath.
@@ -873,9 +1297,11 @@ local function skip(cx: WindowCx)
 	if pending == nil then
 		return
 	end
+	local name = update_name(pending.version, M.version(), pending.short)
 	kv_set(KV_KEPT, pending.latest)
 	set_pending(nil)
-	cx:toast("info", "Skipped omp Usage " .. update_name(pending.version, M.version(), pending.short), "Update any time: omp Usage: Check for updates…")
+	record(true, "skipped", nil, name)
+	cx:toast("info", "Skipped omp Usage " .. name, "Update any time: omp Usage: Check for updates…")
 end
 
 tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
@@ -907,6 +1333,10 @@ end)
 -- panel) opens the update card or says it's up to date, and reports failures; an automatic check stays quiet but
 -- for a toast the first time it finds an update the user hasn't skipped.
 function M.check(cx: WindowCx, manual: boolean)
+	if M.landing() then
+		resume(cx, manual) -- an update that hasn't finished landing: the copy is no version to check yet
+		return
+	end
 	if busy then
 		if manual then
 			cx:toast("info", "omp Usage is already checking or updating")
@@ -916,11 +1346,17 @@ function M.check(cx: WindowCx, manual: boolean)
 	busy = true
 	local function stop(at: WindowCx, title: string, detail: string)
 		busy = false
+		record(false, "failed", if detail ~= "" then detail else title)
 		if manual then
 			at:toast("error", title, detail)
 		else
 			tern.log.warn("omp-usage update check: " .. title .. ": " .. detail)
 		end
+	end
+	-- A check that completed: KV_LAST says when, and the outcome what it found.
+	local function completed(reason_code: string, version: string?)
+		kv_set(KV_LAST, os.time())
+		record(true, reason_code, nil, version)
 	end
 	prepare(cx, true, function(src: Source?, failure: Failure?, cx1: WindowCx)
 		if src == nil then
@@ -933,7 +1369,6 @@ function M.check(cx: WindowCx, manual: boolean)
 			stop(cx1, if failure then failure.title else "omp Usage can't check for updates", if failure then failure.detail else "")
 			return
 		end
-		kv_set(KV_LAST, os.time())
 		git(cx1, src.dir, { "rev-parse", "--short", src.head }, 10000, function(rev: Git, cx3: WindowCx)
 			local head = trim(rev.out)
 			-- Counts, and below lists, follow the main line's first parents: a merge stands for the commits it brings
@@ -949,6 +1384,7 @@ function M.check(cx: WindowCx, manual: boolean)
 				if behind == 0 then
 					busy = false
 					set_pending(nil)
+					completed("up_to_date", M.version())
 					if manual then
 						local version = M.version()
 						cx4:toast("success", "omp Usage is up to date", (if version then version .. " · " else "") .. head)
@@ -960,7 +1396,9 @@ function M.check(cx: WindowCx, manual: boolean)
 				if (ahead :: number) > 0 then
 					busy = false
 					set_pending(nil)
-					local title = "omp Usage has an update, but your clone has " .. plural(ahead :: number, "local commit")
+					local commits_text = plural(ahead :: number, "local commit")
+					local title = "omp Usage has an update, but your clone has " .. commits_text
+					record(false, "diverged", "Your clone has " .. commits_text .. ": merge the update by hand with git pull")
 					if manual then
 						cx4:toast("info", title, "Merge it by hand: git pull, in the repo folder")
 					else
@@ -985,6 +1423,7 @@ function M.check(cx: WindowCx, manual: boolean)
 					if relevant == 0 then
 						busy = false
 						set_pending(nil)
+						completed("up_to_date", M.version())
 						if manual then
 							local version = M.version()
 							cx5:toast(
@@ -1048,16 +1487,19 @@ function M.check(cx: WindowCx, manual: boolean)
 										current = M.version(),
 										available = available,
 									}
+									local name = update_name(available, offer.current, tip_short)
 									if not manual and kv_get(KV_KEPT) == latest then
 										set_pending(nil) -- the user skipped this one
+										completed("skipped", name)
 										return
 									end
 									local before = M.pending()
 									set_pending({ sha = tip, short = tip_short, version = available, latest = latest })
+									completed("available", name)
 									if manual then
 										show_card(cx9, offer)
 									elseif before == nil or before.latest ~= latest then
-										local name = update_name(available, offer.current, tip_short)
+										-- a toast the first time an automatic check finds it
 										cx9:toast(
 											"info",
 											"omp Usage " .. name .. " is available",
@@ -1076,11 +1518,21 @@ end
 
 -- An automatic check when the last one, in any window, is as old as the interval (less a minute's slack for a
 -- timer that fires early); looked at hourly. Windows started together tick together: each writes its claim, and
--- only the window whose claim stuck checks.
+-- only the window whose claim stuck checks. An update that hasn't finished landing is tried again instead, each
+-- tick, whatever the interval.
 local function tick(cx: WindowCx?)
 	tern.timer(TICK_MS, tick)
+	if cx == nil then
+		return
+	end
+	if M.landing() then
+		claim(cx, KV_LAND_CLAIM, function(later: WindowCx)
+			resume(later, false)
+		end)
+		return
+	end
 	local hours = M.interval().hours
-	if cx == nil or hours == nil then
+	if hours == nil then
 		return
 	end
 	local now = os.time()
@@ -1089,28 +1541,58 @@ local function tick(cx: WindowCx?)
 	if type(last) == "number" and last <= now and now - last < (hours :: number) * 3600 - 60 then
 		return
 	end
-	local ok, key = pcall(function()
-		return cx:window_key()
-	end)
-	local claim = (if ok then tostring(key) else "") .. "@" .. tostring(tern.now())
 	kv_set(KV_CHECKED, now)
-	kv_set(KV_CLAIM, claim)
-	tern.timer(CLAIM_SETTLE_MS, function(later: WindowCx?)
-		if later and kv_get(KV_CLAIM) == claim then
-			M.check(later, false)
-		end
+	claim(cx, KV_CLAIM, function(later: WindowCx)
+		M.check(later, false)
 	end)
 end
 
+-- An update `finish_staged` finished as this VM loaded: said once there's a window to say it in.
+if staged_landed then
+	tern.timer(0, function(cx: WindowCx?)
+		local landed = staged_landed
+		if cx and landed then
+			refresh_badge()
+			cx:toast("success", "omp Usage finished updating to " .. landed.name, updated_note(landed.extension))
+		end
+	end)
+end
 if tern.runtime.os ~= "ios" then -- no processes there, so no git
 	tern.timer(FIRST_CHECK_MS, tick)
+	-- Soon after a load: an installed copy finishes an update that `finish_staged` couldn't (a reload or restart cut
+	-- it short before it staged, or the copy keeps failing), in one window of those loading together; a clone drops
+	-- a pending update it already has.
+	tern.timer(RESUME_MS, function(cx: WindowCx?)
+		if cx == nil then
+			return
+		end
+		if INSTALLED then
+			if M.landing() then
+				claim(cx, KV_LAND_CLAIM, function(later: WindowCx)
+					resume(later, true)
+				end)
+			end
+		else
+			reconcile(cx, nil)
+		end
+	end)
 end
--- An installed copy, once it loads, has omp load its extension (no processes on iOS, so no omp either).
+-- An installed copy, once it loads, has omp load its extension (no processes on iOS, so no omp either): one window of
+-- those loading together, and not again within SETUP_FRESH_S of the last.
 if INSTALLED and tern.runtime.os ~= "ios" then
 	tern.timer(SETUP_MS, function(cx: WindowCx?)
-		if cx then
-			extension.setup(cx, false)
+		if cx == nil then
+			return
 		end
+		claim(cx, KV_SETUP_CLAIM, function(later: WindowCx)
+			local now = os.time()
+			local last = kv_get(KV_SETUP_AT)
+			if type(last) == "number" and last <= now and now - last < SETUP_FRESH_S then
+				return
+			end
+			kv_set(KV_SETUP_AT, now)
+			extension.setup(later, false)
+		end)
 	end)
 end
 

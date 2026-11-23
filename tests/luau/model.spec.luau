@@ -153,15 +153,73 @@ describe("build_model, Current model", function()
 		eq(shares_of(model.groups[1]), { ["5h"] = "62", ["7d"] = "41", ["Fable 7d"] = "83" })
 	end)
 
-	it("leaves pace out, and changes the signature, while Show pace is off", function()
-		local claude = F.claude(NOW, { r5 = 0.2, in5 = 2 * F.H })
+	it("reads Show pace from its three choices, and the on/off it was before while none is stored", function()
+		local function stored(kv: { [string]: any }?): string
+			local data = setup(nil, kv)
+			return data.load_settings().pace
+		end
+		eq(stored(nil), "ahead", "nothing stored")
+		eq(stored({ ["omp-usage.show-pace"] = true }), "ahead", "was on")
+		eq(stored({ ["omp-usage.show-pace"] = false }), "off", "was off")
+		eq(stored({ ["omp-usage.show-pace"] = false, ["omp-usage.pace"] = "always" }), "always", "a stored choice wins")
+		eq(stored({ ["omp-usage.show-pace"] = false, ["omp-usage.pace"] = "ahead" }), "ahead", "also over an old off")
+		eq(stored({ ["omp-usage.pace"] = "sometimes" }), "ahead", "an unknown choice")
+	end)
+
+	it("shows the pace Show pace asks for: of windows running ahead, of every window, or of none", function()
+		-- 5h: 80% used with 3h of 5h gone (1.3×); 7d: 20% used with half of it gone (0.4×)
+		local claude = F.claude(NOW, { r5 = 0.2, in5 = 2 * F.H, r7 = 0.8, in7 = 3.5 * F.D })
 		local data, w = setup(F.doc(NOW, { claude = claude }))
-		local on = model_of(data, F.dock("Opus 5.5", nil))
-		eq(data.pace_text(on.groups[1].windows[1].pace, on.groups[1].windows[1].remaining), "1.3× pace · empty ~45m", "on by default")
-		w.kv.set(data.KV_SHOW_PACE, false)
-		local off = model_of(data, F.dock("Opus 5.5", nil))
-		eq(off.groups[1].windows[1].pace, nil, "off")
-		ok(on.signature ~= off.signature, "the signature changes, so the line redraws")
+		local function shown(): ({ [string]: { any } }, string)
+			local model = model_of(data, F.dock("Opus 5.5", nil))
+			local out: { [string]: { any } } = {}
+			for _, window in model.groups[1].windows do
+				out[window.label] = { data.pace_text(window.pace, window.remaining) }
+			end
+			return out, model.signature
+		end
+		local ahead, ahead_signature = shown()
+		eq(ahead["5h"], { "1.3× pace · empty ~45m", true }, "ahead by default")
+		eq(ahead["7d"], { nil, false }, "a window that lasts says nothing")
+		eq(data.furthest_ahead(model_of(data, F.dock("Opus 5.5", nil))).label, "5h", "the window running ahead")
+
+		w.kv.set(data.KV_PACE, "always")
+		local always, always_signature = shown()
+		eq(always["5h"], { "1.3× pace · empty ~45m", true }, "always: ahead still warns")
+		eq(always["7d"], { "0.4× pace · lasts past reset", false }, "always: a window that lasts says so")
+		eq(data.furthest_ahead(model_of(data, F.dock("Opus 5.5", nil))).label, "5h", "always: only a window running ahead")
+
+		w.kv.set(data.KV_PACE, "off")
+		local off, off_signature = shown()
+		eq({ off["5h"], off["7d"], off["Fable 7d"] }, { { nil, false }, { nil, false }, { nil, false } }, "off")
+		eq(data.furthest_ahead(model_of(data, F.dock("Opus 5.5", nil))), nil, "off: no window runs ahead")
+
+		ok(ahead_signature ~= always_signature and always_signature ~= off_signature and ahead_signature ~= off_signature, "each choice has its own signature, so the line redraws")
+	end)
+
+	it("picks the window furthest ahead as its pace reads, then the soonest to run out", function()
+		local function furthest(claude: any): any
+			local data = setup(F.doc(NOW, { claude = claude }))
+			return data.furthest_ahead(model_of(data, F.dock("Opus 5.5", nil)))
+		end
+		-- 5h at 1.3× (empty in 45m), 7d at 1.6×
+		local far = furthest(F.claude(NOW, { r5 = 0.2, in5 = 2 * F.H, r7 = 0.2, in7 = 3.5 * F.D }))
+		eq({ far.label, string.format("%.1f", far.pace.ratio) }, { "7d", "1.6" }, "the highest ratio")
+		-- 5h at 1.30× (empty in ~51m), 7d at 1.34× (empty in ~1d 17h): both read 1.3×
+		local tie = furthest(F.claude(NOW, { r5 = 0.22, in5 = 2 * F.H, r7 = 0.33, in7 = 3.5 * F.D }))
+		eq({ tie.label, string.format("%.1f", tie.pace.ratio) }, { "5h", "1.3" }, "a tie: the soonest to run out")
+		-- used up: nothing left to warn about
+		eq(furthest(F.claude(NOW, { r5 = 0, in5 = 2 * F.H })), nil, "a window used up")
+		eq(setup(F.doc(NOW)).furthest_ahead(nil), nil, "no model")
+	end)
+
+	it("changes the signature with Show pace even when no row changes", function()
+		-- every window runs ahead, so When ahead and Always draw the same rows
+		local claude = F.claude(NOW, { r5 = 0.2, in5 = 2 * F.H, r7 = 0.2, in7 = 3.5 * F.D, rf = 0.2, inf = 3.5 * F.D })
+		local data, w = setup(F.doc(NOW, { claude = claude }))
+		local ahead = model_of(data, F.dock("Opus 5.5", nil)).signature
+		w.kv.set(data.KV_PACE, "always")
+		ok(model_of(data, F.dock("Opus 5.5", nil)).signature ~= ahead, "the signature names the choice")
 	end)
 end)
 

@@ -6,18 +6,20 @@ local data = require("./data")
 local detail_view = require("./details")
 
 type Detail = data.Detail
+type Group = data.Group
 type Model = data.Model
 type Settings = data.Settings
 type Window = data.Window
 
 local now_ms = data.now_ms
-local countdown_minutes = data.countdown_minutes
-local clock_at = data.clock_at
+local clock_of = data.clock_of
 local reset_text = data.reset_text
 local tone_of = data.tone_of
 local is_fable = data.is_fable
 local window_name = data.window_name
 local palette_for = data.palette_for
+local pct_text = data.pct_text
+local pace_text = data.pace_text
 
 local SHEET = "usage"
 -- A saved reset expiring this soon reads `--warn` in the card (the extension flags it with `!` in the line).
@@ -130,10 +132,11 @@ local function window_colors(tone: string, group: number): (string, string)
 	return color, color
 end
 
-type Paint = { from: number, to: number, color: string }
+-- `dim`: a provider's numbers that are old (see data.luau's FRESH_MS), drawn faint.
+type Paint = { from: number, to: number, color: string, dim: boolean? }
 -- A window's bar: its first glyph, its length and how many glyphs it fills (a fraction), the glyph its window
 -- ends at, the window's key (provider and label) and its colors.
-type Bar = { at: number, glyphs: number, fill: number, ends: number, key: string, a: string, b: string }
+type Bar = { at: number, glyphs: number, fill: number, ends: number, key: string, a: string, b: string, dim: boolean? }
 type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
 
 -- One provider: `Claude  5H ━━━━━━━━ 98% left  3h 57m · 7D ━━━━━━━━ 71% left  11h 37m  +1 · <other statuses>`.
@@ -141,6 +144,8 @@ type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
 -- card, and a `·` only between providers: `Claude  5H ━━━━━━ 98%  7D ━━━━━━ 71% +1 · Codex  7D ━━━━━━ 79% +2`.
 -- A provider with several accounts names each once, in its color, before its first window, which a `·` sets
 -- apart from the account before: `Claude alice  7D ━━━━━━━━ 68% left … · bob  5H ━━━━━━━━ 40% left …`.
+-- A window whose reset has passed reads `5H reset`, without a bar, until new numbers come; a provider whose
+-- numbers are old is drawn faint (the card says how old). Pace stays in the card: the line has no room for it.
 -- Each window's parts are joined by no-break spaces (a provider's label with its first window) so it wraps
 -- whole; with them, what colors each part. `compact` overrides the format the number of providers picks.
 local function line_of(model: Model, compact: boolean?): Line
@@ -148,10 +153,11 @@ local function line_of(model: Model, compact: boolean?): Line
 	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {} }
 	local several = if compact ~= nil then compact else #model.groups > 1
 	local bar_glyphs = if several then COMPACT_BAR_GLYPHS else BAR_GLYPHS
+	local dim = false
 	local function add(s: string, color: string?)
 		local n = glyph_count(s)
 		if color then
-			table.insert(line.paints, { from = line.glyphs, to = line.glyphs + n, color = color })
+			table.insert(line.paints, { from = line.glyphs, to = line.glyphs + n, color = color, dim = if dim then true else nil })
 		end
 		table.insert(parts, s)
 		line.glyphs += n
@@ -163,6 +169,7 @@ local function line_of(model: Model, compact: boolean?): Line
 		end
 	end
 	for g, group in model.groups do
+		dim = group.as_of ~= nil
 		if #group.windows == 0 then
 			next_part()
 			add(unbroken(group.label .. " details"), group_color(g, "a"))
@@ -185,15 +192,30 @@ local function line_of(model: Model, compact: boolean?): Line
 			end
 			add(unbroken(string.upper(window.bare or window.label)), "var(--ou-lbl)")
 			add(NBSP)
-			local at = line.glyphs
-			add(string.rep(BAR, bar_glyphs))
-			add(NBSP)
-			add(tostring(window.pct) .. "%", "var(--ou-num-" .. tone .. ")")
-			if not several then
-				add(NBSP .. "left", "var(--ou-dim)")
-				if window.reset then
-					add(NBSP .. NBSP .. unbroken(window.reset :: string), "var(--ou-soft)")
+			if window.passed then
+				add("reset", "var(--ou-soft)")
+			else
+				local at = line.glyphs
+				add(string.rep(BAR, bar_glyphs))
+				add(NBSP)
+				add(pct_text(window), "var(--ou-num-" .. tone .. ")")
+				if not several then
+					add(NBSP .. "left", "var(--ou-dim)")
+					if window.reset then
+						add(NBSP .. NBSP .. unbroken(window.reset :: string), "var(--ou-soft)")
+					end
 				end
+				local a, b = window_colors(tone, g)
+				table.insert(line.bars, {
+					at = at,
+					glyphs = bar_glyphs,
+					fill = math.clamp(window.pct, 0, 100) / 100 * bar_glyphs,
+					ends = 0, -- set below, once its saved resets are on
+					key = group.key .. "/" .. window.label,
+					a = a,
+					b = b,
+					dim = if dim then true else nil,
+				})
 			end
 			if window.saved then
 				local fable = is_fable(group.id, window.label)
@@ -203,18 +225,12 @@ local function line_of(model: Model, compact: boolean?): Line
 				end
 				add((if several then NBSP else NBSP .. NBSP) .. saved, if window.expires then "var(--ou-num-warn)" else group_color(g, "a"))
 			end
-			local a, b = window_colors(tone, g)
-			table.insert(line.bars, {
-				at = at,
-				glyphs = bar_glyphs,
-				fill = math.clamp(window.pct, 0, 100) / 100 * bar_glyphs,
-				ends = line.glyphs,
-				key = group.key .. "/" .. window.label,
-				a = a,
-				b = b,
-			})
+			if not window.passed then
+				line.bars[#line.bars].ends = line.glyphs
+			end
 		end
 	end
+	dim = false
 	for _, other in model.others do
 		next_part()
 		add(unbroken(other), "var(--ou-soft)")
@@ -230,17 +246,18 @@ local function line_paint(line: Line): string
 	for _, paint in line.paints do
 		table.insert(items, {
 			at = paint.from,
-			stops = string.format("%s %s %s", solid(paint.color), em(paint.from), em(paint.to)),
+			stops = string.format("%s %s %s", if paint.dim then faded(paint.color, 45) else solid(paint.color), em(paint.from), em(paint.to)),
 		})
 	end
 	for _, bar in line.bars do
 		local tip = bar.at + bar.fill
 		local stops: { string } = {}
 		if bar.fill > 0 then
-			table.insert(stops, string.format("%s %s", faded(bar.a, 40), em(bar.at)))
-			table.insert(stops, string.format("%s %s", solid(bar.b), em(tip)))
+			table.insert(stops, string.format("%s %s", faded(bar.a, if bar.dim then 20 else 40), em(bar.at)))
+			table.insert(stops, string.format("%s %s", if bar.dim then faded(bar.b, 45) else solid(bar.b), em(tip)))
 		end
 		if bar.fill < bar.glyphs then
+			-- the track is already faint, and its color carries its own alpha: a dim bar keeps it as it is
 			table.insert(stops, string.format("%s %s %s", solid("var(--ou-track)"), em(tip), em(bar.at + bar.glyphs)))
 		end
 		table.insert(items, { at = bar.at, stops = table.concat(stops, ", ") })
@@ -282,7 +299,7 @@ local function tips(line: Line, strength: number): Layers
 	local layers: Layers = { images = {}, positions = {}, sizes = {} }
 	for _, bar in line.bars do
 		local x = (bar.at + bar.fill) * GLYPH
-		table.insert(layers.images, tip_image(bar.b, strength))
+		table.insert(layers.images, tip_image(bar.b, if bar.dim then math.floor(strength / 2) else strength))
 		table.insert(layers.positions, string.format("%spx %spx", num(x - TIP_W / 2), num(BAR_Y - TIP_H / 2)))
 		table.insert(layers.sizes, string.format("%s %spx", fits(bar, TIP_W), num(TIP_H)))
 	end
@@ -302,6 +319,30 @@ local HOST = ":is("
 -- 16px right inset: both percentages are taken of `100% + 16px`.
 local SPINE_SIDE =
 	"max(calc(max(16px, min(40px, calc((100% + 16px) * 0.04))) + var(--tv-px, 0px)), calc((100% + 16px) / 2 - 420px))"
+
+-- The room above the composer counts on omp's working row being what's right above the line: that row is 26px tall,
+-- its text in the middle. Anything else omp shows there sits flush on the line: a progress row (such as the skill
+-- optimizer's "Optimizing skills failed: …" as a session starts), an extension's widget, a panel. These match the
+-- blocks those live in, while one shows, so it keeps its own room below. omp's dock starts with its HUD row, then
+-- those blocks (one column of them since omp 19.2, one block each before), the working row's slot, Tern's tray, the
+-- queue and the composer, so the match is by place: within the 9 blocks after the first, and never the slot (whose
+-- row has its role, or Tern's dotted form), the tray or the last block (in omp 19.2, the composer's). It can't go by
+-- the blocks around them: Tern doesn't restyle an element when one before it changes, so a `+` chain on a block that
+-- comes and goes is matched late, if at all.
+local BLOCKS_ABOVE_SLOT = 9
+local function other_above(): string
+	local selectors: { string } = {}
+	for before = 0, BLOCKS_ABOVE_SLOT - 1 do
+		table.insert(
+			selectors,
+			".sf-dock:not(.sf-chat-spine) > :first-child + "
+				.. string.rep("* + ", before)
+				.. ":not(.sf-void):not(.sf-hidden):not(.sf-tray):not(.sf-tray-dotted)"
+				.. ":not([data-role='omp.hud.activity']):not(:last-child)"
+		)
+	end
+	return table.concat(selectors, ",\n")
+end
 
 -- The pane the line is drawn in: the focused one (`.tn-pane.on`), or, while the settings panel has focus and its
 -- tab holds a single agent pane, that pane (`.tn-pane.agent`), so a click in the panel shows on the line beside it at
@@ -367,6 +408,12 @@ local LINE_CSS = [==[
 }
 .sf-dock.sf-tray-ctx > .sf-col.sf-tray.under {
 	margin-top: 19px;
+}
+/* anything else right above the line (a progress row, a widget, a panel) would sit flush on it, not 26px tall with
+   its text in the middle as the working row is: it keeps 12px below itself, so it clears the line and its capsule
+   (not in Spine, where the line is under the hairline) */
+$OTHER_ABOVE {
+	margin-bottom: 12px;
 }
 /* the providers' colors */
 $PALETTE
@@ -554,6 +601,7 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 		METER = meter(),
 		METER_SPINE = meter(".sf-chat-spine"),
 		METER_TRAY = meter(".sf-tray-ctx"),
+		OTHER_ABOVE = other_above(),
 		SPINE_SIDE = SPINE_SIDE,
 		CHIPS = line_pane .. " " .. CHIPS,
 		HOST = host(nil),
@@ -604,7 +652,7 @@ local function account_summary(prefix: string, windows: { Window }, provider: st
 	local text = prefix
 	local lowest = 100
 	for _, window in windows do
-		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
+		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. pct_text(window)
 		if window.saved then
 			text ..= " +" .. tostring(window.saved) .. (if is_fable(provider, window.bare or window.label) then "F" else "")
 		end
@@ -669,9 +717,29 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 	-- accounts not chosen beside a picked one count too) and the others fold into one row per provider. A picked
 	-- account (its provider has `rest`) always shows in full. The rows also carry `runs`: how many rows each
 	-- account shown in full takes, by `<group key>/<account>` (the panel measures picks with them).
+	-- In the hover, when every provider with windows is dimmed (numbers older than data.luau's FRESH_MS), the
+	-- title says how old the oldest are, in the warning tone; when only some are, each dimmed one says so under its
+	-- heading instead, so a fresh provider isn't labelled old. The details view always puts it beside the heading.
+	local timed, dimmed, oldest = 0, 0, nil :: Group?
+	for _, group in model.groups do
+		if #group.windows > 0 then
+			timed += 1
+			if group.as_of then
+				dimmed += 1
+				if oldest == nil or (group.age or 0) > ((oldest :: Group).age or 0) then
+					oldest = group
+				end
+			end
+		end
+	end
+	local title_age = if fixed ~= "details" and dimmed > 0 and dimmed == timed then (oldest :: Group).as_of else nil
 	local function build(full: number, keep: number): { Row }
 		local shown, kept = 0, 0
-		local rows: { Row } = { { text = model.title, color = "var(--oc-head)" } }
+		local rows: { Row } = {
+			if title_age
+				then { text = model.title .. " · " .. (title_age :: string), color = "var(--oc-warn)" }
+				else { text = model.title, color = "var(--oc-head)" },
+		}
 		local runs_rows: { [string]: number } = {}
 		local several = #model.groups > 1
 		for g, group in model.groups do
@@ -696,7 +764,12 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 			elseif hover and not several then
 				rows[1].badge = plan_of(group.details or {}, nil)
 			end
-			local resets = group.resets or {}
+			-- dimmed while others aren't (see `title_age`), or in the details: how old, before any of its numbers
+			if group.as_of and title_age == nil then
+				local lead = if not several then "" elseif heading_at then CARD_INDENT else group.label .. " "
+				table.insert(rows, { text = lead .. (group.as_of :: string), color = "var(--oc-warn)", kind = "as_of", account_note = true })
+			end
+			local resets: { data.Reset } = group.resets or {}
 			local function add_resets(into: { Row }, label: string): boolean
 				local fable = is_fable(group.id, label)
 				local added = false
@@ -714,7 +787,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				end
 				return added
 			end
-			local details = group.details or {}
+			local details: { Detail } = group.details or {}
 			-- Full details keep every fact and its account/window boundary. The hover keeps status warnings
 			-- and one opaque detail when there is no meter; quantities and metadata live in the native view.
 			local function add_details(into: { Row }, account: string?, window: string?, first: boolean)
@@ -724,7 +797,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						local status = detail.kind == "stale" or detail.kind == "error"
 						local opaque = #group.windows == 0 and not noted and detail.kind ~= "plan" and detail.kind ~= "observed"
 						if fixed == "details" or status or opaque then
-							local shared = detail.account == nil and account ~= nil
+							local shared = detail.account == nil and account ~= nil and not detail.whole
 							table.insert(into, {
 								text = CARD_INDENT .. (if shared then "Provider · " else "") .. detail.text,
 								color = detail_view.color(detail.kind),
@@ -763,7 +836,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				fold_muted = fold_muted or color ~= nil
 				for _, window in windows do
 					if window.pct < lowest then
-						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
+						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. pct_text(window)
 					end
 				end
 				if #windows == 0 and lowest_text == "" then lowest_text = "details" end
@@ -819,11 +892,12 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						local a, b = window_colors(tone, g)
 						table.insert(new, {
 							text = window_name(window.bare or window.label) .. " window",
-							right = tostring(window.pct) .. "% left",
+							right = if window.passed then "reset" else pct_text(window) .. " left",
 							color = "var(--oc-win-" .. tone .. ")",
 							share = math.clamp(window.pct, 0, 100) / 100,
 							a = a,
 							b = b,
+							lit = accent,
 						})
 						local estimates = if hover then estimate_row(details, run.name, window.label) else nil
 						if estimates then
@@ -832,17 +906,23 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						if window.covers then
 							table.insert(new, { text = CARD_INDENT .. (window.covers :: string), color = "var(--oc-mute)" })
 						end
-						local reset = window.reset
-						if reset == "soon" then
-							table.insert(new, { text = CARD_INDENT .. "resets soon", color = "var(--oc-mute)" })
-						elseif reset then
-							local row = "resets in " .. reset
-							local minutes, exact = countdown_minutes(reset)
-							local at = if minutes then clock_at(minutes, exact) else nil
+						-- the reset, at the time the cache gives (or its countdown counted from when it was written)
+						local at = if window.resets_at then clock_of(window.resets_at :: number, window.exact == true) else nil
+						if window.passed then
+							table.insert(new, {
+								text = CARD_INDENT .. "reset" .. (if at then " " .. (at :: string) else "") .. " · waiting for new numbers",
+								color = "var(--oc-mute)",
+							})
+						elseif window.reset then
+							local row = "resets in " .. (window.reset :: string)
 							if at then
-								row ..= " · " .. at
+								row ..= " · " .. (at :: string)
 							end
 							table.insert(new, { text = CARD_INDENT .. row, color = "var(--oc-mute)" })
+						end
+						local pace, ahead = pace_text(window.pace, window.remaining)
+						if pace then
+							table.insert(new, { text = CARD_INDENT .. (pace :: string), color = if ahead then "var(--oc-warn)" else "var(--oc-mute)", kind = "pace" })
 						end
 						local has_dates = add_resets(new, string.lower(window.label))
 						if not has_dates and window.saved then
@@ -917,7 +997,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 		for _, window in group.windows do
 			if window.account then names[window.account] = true end
 		end
-		for _, detail in group.details or {} do
+		for _, detail in (group.details or {}) :: { Detail } do
 			if detail.account then names[detail.account] = true end
 		end
 		if group.rest == nil then
@@ -1153,7 +1233,7 @@ local function card_css(rows: { Row }, target: string?): string
 		end
 		-- an estimate's icon: a tinted disc ringed in its color over the icon's middle cell; the tokens icon
 		-- draws its lines in the text's color (the cost icon's `$` is a glyph of the row)
-		for _, icon in row.icons or {} do
+		for _, icon in (row.icons or {}) :: { { cell: number, kind: string } } do
 			local color = if icon.kind == "tokens" then TOKENS_ICON else COST_ICON
 			local cx = (icon.cell + 1.5) * GLYPH_W
 			local cy = y + CARD_ROW / 2
@@ -1358,15 +1438,16 @@ local function sheet(model: Model, settings: Settings, p: Pulse?, hint: string):
 	return css
 end
 
--- Hides the status facts the line redraws from the focused pane's bar, by their exact ids: `hook-N` numbers
--- depend on which statuses a session has set, so another pane's `hook-1` may be another extension's.
-local function hide_css(ids: { string }): string
+-- Hides the status facts the line redraws from the focused pane's bar (or, `scope`, other panes'), by their exact
+-- ids: `hook-N` numbers depend on which statuses a session has set, so another pane's `hook-1` may be another
+-- extension's.
+local function hide_css(ids: { string }, scope: string?): string
 	if #ids == 0 then
 		return ""
 	end
 	local selectors: { string } = {}
 	for _, id in ids do
-		table.insert(selectors, line_pane .. " [data-role='omp.composer.bar'] [data-id=" .. css_string(id) .. "]")
+		table.insert(selectors, (scope or line_pane) .. " [data-role='omp.composer.bar'] [data-id=" .. css_string(id) .. "]")
 	end
 	return table.concat(selectors, ",\n") .. " {\n\tdisplay: none !important;\n}\n"
 end
@@ -1377,6 +1458,29 @@ local function install(css: string)
 		tern.css(SHEET, css)
 	end
 end
+
+-- The extension's usage status in every agent pane's bar, not only the focused one's: hidden wherever the line
+-- reads that pane's numbers from the cache (see data.luau's `shared_hidden`), checked every few seconds, in a sheet
+-- of its own. A surface that can't be read keeps the last answer.
+local FACTS_SHEET = "usage-facts"
+local FACTS_POLL_MS = 5000
+local facts_css: string? = nil
+local function sync_facts(cx: WindowCx?)
+	tern.timer(FACTS_POLL_MS, sync_facts)
+	if cx == nil then
+		return
+	end
+	local ids = data.shared_hidden(cx :: WindowCx, data.load_settings(), data.read_cache(now_ms()))
+	if ids == nil then
+		return
+	end
+	local css = hide_css(ids :: { string }, ".tn-pane.agent")
+	if css ~= facts_css then
+		facts_css = css
+		tern.css(FACTS_SHEET, css)
+	end
+end
+tern.timer(FACTS_POLL_MS, sync_facts)
 
 
 -- The pane the line is drawn in (see `line_pane`), as window.luau's `refresh` reads and sets it.

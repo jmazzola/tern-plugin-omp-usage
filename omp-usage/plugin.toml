@@ -1,7 +1,0 @@
-schema = 1
-id = "omp-usage"
-name = "omp Usage"
-version = "0.5.1"
-description = "Moved to the repo's root: links it there."
-icon = "gauge"
-window = "window.luau"

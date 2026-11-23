@@ -108,11 +108,15 @@ local sync_panel = panel.sync_panel
 local flush_panel = panel.flush_panel
 local open_panel = panel.open_panel
 
+-- The agent pane whose line was drawn last (cleared when it closes, see `pane_closed`).
 local shown_pane: number? = nil
 -- pane -> where its line came from and each window's share, by provider and window
 local last_seen: { [number]: { source: string, values: { [string]: number } } } = {}
 local pulse: Pulse? = nil
 local pulse_seq = 0
+-- The widget bar's segment: the pace warning `show_pane` last drew (nil: no window runs ahead, the icon alone).
+local warning: string? = nil
+local set_warning: (text: string?) -> ()
 
 -- What redraws the quota details (with the commands, below), and the dock `show_pane` last read, which the
 -- panel's preview of the line and the details are drawn from.
@@ -122,6 +126,18 @@ local refresh: (cx: WindowCx) -> ()
 local sync_status: () -> ()
 -- What the installed sheet was built from (see `show_pane`).
 local sheet_key: string? = nil
+
+-- A line's pace warning, for the widget bar: `Claude 1.4× pace` for its window running furthest ahead (data.luau's
+-- `furthest_ahead`, which follows Show pace). Nil while none does. Tern's own usage widgets show each provider's
+-- share and reset, so the segment says only this.
+local function warning_of(model: data.Model): string?
+	local found = data.furthest_ahead(model)
+	if found == nil then
+		return nil
+	end
+	local pace = string.format("%.1f× pace", found.pace.ratio)
+	return if found.provider_label == "" then pace else found.provider_label .. " " .. pace
+end
 
 -- Draws the line of an agent pane's composer. Most polls change nothing it draws, and then the sheet isn't built
 -- again: a slow call trips the window's 50 ms budget, which turns off every timer of the plugin until a reload.
@@ -151,10 +167,11 @@ local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: 
 	end
 	last_seen[pane] = { source = model.source, values = values }
 	last_dock = dock
+	set_warning(warning_of(model))
 	local hint = settings_hint(shortcut(cx))
 	local running = if pulse and tern.now() < pulse.until_ms then pulse.seq else 0
 	local hidden = table.concat(dock.hide, "\n")
-	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, hint, tostring(running), hidden, line_pane() }, "\n")
+	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, tostring(settings.card_rows), settings.pace, hint, tostring(running), hidden, line_pane() }, "\n")
 	if key ~= sheet_key then
 		sheet_key = key
 		install(hide_css(dock.hide) .. sheet(model, settings, pulse, hint))
@@ -187,6 +204,20 @@ local function agents_in(cx: WindowCx, tab: number?): { number }
 	return found
 end
 
+-- The agent pane the line was last drawn from, while it is still open and still an agent; else nil (and forgotten).
+local function live_shown(cx: WindowCx): number?
+	local pane = shown_pane
+	if pane == nil then
+		return nil
+	end
+	local info = cx.session:pane(pane)
+	if info and info.kind == "agent" then
+		return pane
+	end
+	shown_pane, last_dock = nil, nil
+	return nil
+end
+
 -- Shows the focused agent's usage; a focused non-agent pane keeps the last line (no composer shows it there),
 -- but while the settings panel has focus the line it last showed follows the settings, for the panel's preview,
 -- and is drawn on the agent pane beside the panel when that is its tab's only one (see `line_pane`).
@@ -201,7 +232,7 @@ refresh = function(cx: WindowCx)
 		if info and info.kind == "agent" then
 			target = pane
 		elseif info and (pane == panel_pane() or pane == detail_view.pane) then
-			target = shown_pane or some_agent(cx, info.tab)
+			target = live_shown(cx) or some_agent(cx, info.tab)
 			local beside = agents_in(cx, info.tab)
 			if #beside == 1 and beside[1] == target then
 				scope = ".tn-pane.agent"
@@ -209,7 +240,7 @@ refresh = function(cx: WindowCx)
 		end
 	end
 	if scope ~= line_pane() and target == nil then
-		target = shown_pane -- redraw the last line in its usual place, the focused pane
+		target = live_shown(cx) -- redraw the last line in its usual place, the focused pane
 	end
 	set_line_pane(scope)
 	if target == nil and panel_pane() == nil and detail_view.pane == nil then
@@ -244,12 +275,43 @@ panel.init(function(): Dock?
 	return last_dock
 end, open_details)
 
+-- The poll re-arms first: an error in `refresh` would otherwise end it for good. Its error is logged at most once a
+-- minute, and the next poll tries again.
+local last_warn = -math.huge
 local function tick(cx: WindowCx?)
-	if cx then
-		refresh(cx)
-	end
 	tern.timer(POLL_MS, tick)
+	if cx == nil then
+		return
+	end
+	local ok, err: any = pcall(refresh, cx)
+	if not ok and tern.now() - last_warn >= 60000 then
+		last_warn = tern.now()
+		tern.log.warn("omp Usage: the line's poll failed:", err)
+	end
 end
+
+-- A closed agent pane is no longer the line's source, nor the panel's preview: the next poll picks a live one.
+tern.on("pane_closed", function(ev: { pane: number }, _cx: WindowCx)
+	last_seen[ev.pane] = nil
+	if ev.pane == shown_pane then
+		shown_pane, last_dock = nil, nil
+		set_warning(nil)
+	end
+end)
+
+-- The cache is read every few seconds while something shows it (an omp pane, the panel or the details), else
+-- seldom (data.luau's `poll_cache`).
+data.set_watching(function(cx: WindowCx): boolean
+	if panel_pane() ~= nil or detail_view.pane ~= nil then
+		return true
+	end
+	for _, info in cx.session:panes() do
+		if info.kind == "agent" then
+			return true
+		end
+	end
+	return false
+end)
 
 tern.on("focus", function(_ev: FocusEvent, cx: WindowCx)
 	refresh(cx)
@@ -260,7 +322,7 @@ tern.timer(300, tick)
 
 -- Settings, two ways: the panel (a canvas beside the focused pane: `omp Usage: Settings panel`,
 -- Ctrl+Alt+U) and pickers (`omp Usage: Settings…`). Native quota details open from Shift+Alt+U,
--- `omp Usage: Quota details` or the panel's bottom bar. `usage` in Plugin segments opens either, as set.
+-- `omp Usage: Quota details` or the panel's bottom bar. The gauge in Plugin segments opens either, as set.
 -- Both settings views store choices in `tern.kv` and redraw the line at once.
 
 -- The details canvas follows the same selected sources and last agent as the preview. Its scrollable body
@@ -359,6 +421,10 @@ local function open_menu(cx: WindowCx)
 							after_change(last_cx or cx2)
 						end
 					end)
+			elseif choice.pick == "pace" then
+				pickers.open_pace(cx2)
+			elseif choice.pick == "alerts" then
+				pickers.open_alerts(cx2)
 			elseif choice.pick == "update" then
 				update.check(cx2, true)
 			elseif choice.pick == "update-every" then
@@ -399,20 +465,32 @@ tern.command({
 	end,
 })
 
--- `usage` in the widget bar's Plugin segments opens the settings panel or the quota details, as set (see data.luau's
--- USAGE_OPENS). Segments must be pure and fast, so it reads what `sync_status` last saw rather than `tern.kv`.
--- While an update is waiting, Update omp Usage (update.luau) stays first.
-local function usage_segment(opens: string): { StatusSegment }
-	return { { text = "usage", icon = "gauge", command = if opens == "details" then DETAILS_ACTION else PANEL_ACTION } }
+-- The widget bar's Plugin segments show a gauge, alone while the focused omp pane's windows keep pace and with a
+-- warning (`Claude 1.4× pace`, toned `warn`) while one runs ahead; a click opens the settings panel or the quota
+-- details, as set (see data.luau's USAGE_OPENS). Segments must be pure and fast, so it reads what `show_pane` and
+-- `sync_status` last saw rather than the cache or `tern.kv`. While an update is waiting, Update omp Usage
+-- (update.luau) stays first.
+-- Tern draws a segment with an empty text as its icon alone (bar.css centers it in its chip).
+local function usage_segment(opens: string, text: string?): { StatusSegment }
+	local command = if opens == "details" then DETAILS_ACTION else PANEL_ACTION
+	return { { text = text or "", icon = "gauge", tone = if text then "warn" else nil, command = command } }
 end
 local status_opens = data.usage_opens()
-local STATUS = usage_segment(status_opens)
+local STATUS = usage_segment(status_opens, nil)
 
 sync_status = function()
 	local opens = data.usage_opens()
 	if opens ~= status_opens then
 		status_opens = opens
-		STATUS = usage_segment(opens)
+		STATUS = usage_segment(opens, warning)
+		pcall(tern.chrome.refresh)
+	end
+end
+
+set_warning = function(text: string?)
+	if text ~= warning then
+		warning = text
+		STATUS = usage_segment(status_opens, text)
 		pcall(tern.chrome.refresh)
 	end
 end

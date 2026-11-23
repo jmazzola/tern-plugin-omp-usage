@@ -3,6 +3,7 @@
 -- settings panel (panel.luau) make: each stores one setting in `tern.kv`, then redraws the line and the panel.
 local data = require("./data")
 local update = require("./update")
+local alerts = require("./alerts")
 
 type Provider = data.Provider
 type Settings = data.Settings
@@ -134,6 +135,32 @@ local function accounts_summary(settings: Settings, provider: Provider): string
 	return "all: " .. table.concat(shown, ", ")
 end
 
+-- Every account whose provider names its plan, as the Plans picker lists them.
+local function plan_items(settings: Settings, providers: { Provider }): { PickItem }
+	local items: { PickItem } = {}
+	for _, provider in providers do
+		local several = #provider.accounts > 1
+		local keys: { string } = if several then accounts_in_order(provider.accounts, settings.account_order[provider.id]) else { "" }
+		for _, key in keys do
+			local account = if several then key else nil
+			local plan = data.plan_in(provider.details, account)
+			if plan then
+				table.insert(items, {
+					label = provider.label .. (if account then " " .. account else ""),
+					detail = plan,
+					current = not data.plan_off(settings, provider.id, key),
+					id = provider.id,
+					name = key,
+				})
+			end
+		end
+	end
+	return items
+end
+
+-- What Alerts do, for the menu and the panel.
+local ALERTS_DETAIL = "a toast at 25%, 10% and 0% left, and before a saved reset expires"
+
 local function menu_items(settings: Settings, providers: { Provider }, keys: string?): { PickItem }
 	local details = mode_details(settings, providers)
 	local items: { PickItem } = {
@@ -155,7 +182,10 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 		})
 	end
 	table.insert(items, { label = "Choose providers…", detail = details.selected, group = "Providers", pick = "choose" })
-	table.insert(items, { label = "Reorder providers…", detail = order_summary(providers), group = "Providers", pick = "reorder" })
+	-- only with something to reorder
+	if #providers > 1 then
+		table.insert(items, { label = "Reorder providers…", detail = order_summary(providers), group = "Providers", pick = "reorder" })
+	end
 	table.insert(items, { label = "Provider colors…", detail = "presets, alternatives or your own", group = "Providers", pick = "colors" })
 	table.insert(items, { label = "Provider windows…", detail = "which of each provider's windows show", group = "Providers", pick = "windows" })
 	-- only with a provider signed in more than once
@@ -168,8 +198,18 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 			pick = "accounts",
 		})
 	end
-	table.insert(items, { label = "Plans…", detail = "which accounts' plans show in the card", group = "Providers", pick = "plans" })
+	-- only with a plan to show or hide
+	if #plan_items(settings, providers) > 0 then
+		table.insert(items, { label = "Plans…", detail = "which accounts' plans show in the card", group = "Providers", pick = "plans" })
+	end
 	table.insert(items, { label = "Card height…", detail = string.format("%d rows; past it, accounts sum up, then fold", settings.card_rows), group = "Card", pick = "card-rows" })
+	local pace = data.PACES[1]
+	for _, choice in data.PACES do
+		if choice.id == settings.pace then
+			pace = choice
+		end
+	end
+	table.insert(items, { label = "Show pace…", detail = pace.label .. ": " .. pace.detail, group = "Card", pick = "pace" })
 	local backdrop = data.BACKDROPS[1].label
 	for _, choice in data.BACKDROPS do
 		if choice.id == settings.backdrop then
@@ -183,7 +223,8 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 			opens = choice.label
 		end
 	end
-	table.insert(items, { label = "usage in the widget bar…", detail = "opens the " .. string.lower(opens), group = "Widget bar", pick = "usage-opens" })
+	table.insert(items, { label = "Widget bar gauge…", detail = "a click opens the " .. string.lower(opens) .. "; it warns while a window runs ahead of its pace", group = "Widget bar", pick = "usage-opens" })
+	table.insert(items, { label = "Alerts…", detail = if alerts.enabled() then "on: " .. ALERTS_DETAIL else "off", group = "Alerts", pick = "alerts" })
 	table.insert(items, { label = "Check for updates…", detail = "fetch the plugin's repository and offer what's new", group = "Updates", icon = "download", pick = "update" })
 	local every = update.interval()
 	table.insert(items, {
@@ -302,7 +343,11 @@ end
 
 local function save_color(id: string, spec: string?)
 	local colors = load_settings().colors
-	colors[id] = spec
+	if spec then
+		colors[id] = spec
+	else
+		colors[id] = nil
+	end
 	store.set(KV_COLORS, colors)
 end
 
@@ -310,7 +355,11 @@ end
 local function toggle_window(id: string, label: string)
 	local hidden = load_settings().hidden
 	local list = toggled(hidden[id] or {}, string.lower(label))
-	hidden[id] = if #list > 0 then list else nil
+	if #list > 0 then
+		hidden[id] = list
+	else
+		hidden[id] = nil
+	end
 	store.set(KV_HIDDEN, hidden)
 end
 
@@ -367,7 +416,11 @@ end
 local function toggle_plan(id: string, name: string)
 	local settings = load_settings()
 	local list = toggled(settings.plan_hidden[id] or {}, name)
-	settings.plan_hidden[id] = if #list > 0 then list else nil
+	if #list > 0 then
+		settings.plan_hidden[id] = list
+	else
+		settings.plan_hidden[id] = nil
+	end
 	store.set(data.KV_PLAN_HIDDEN, settings.plan_hidden)
 end
 
@@ -395,25 +448,9 @@ end
 -- toggles it and opens the list again; Esc is done.
 local function open_plans(cx: WindowCx)
 	local settings = load_settings()
-	local items: { PickItem } = {}
-	for _, provider in providers_in_order(settings) do
-		local several = #provider.accounts > 1
-		local keys = if several then accounts_in_order(provider.accounts, settings.account_order[provider.id]) else { "" }
-		for _, key in keys do
-			local account = if several then key else nil
-			local plan = data.plan_in(provider.details, account)
-			if plan then
-				table.insert(items, {
-					label = provider.label .. (if account then " " .. account else ""),
-					detail = plan,
-					current = not data.plan_off(settings, provider.id, key),
-					id = provider.id,
-					name = key,
-				})
-			end
-		end
-	end
+	local items = plan_items(settings, providers_in_order(settings))
 	if #items == 0 then
+		cx:toast("info", "No plans to choose from yet", "They come from omp's usage cache, for providers that name a plan")
 		return
 	end
 	cx:pick({ items = items, placeholder = "Which plans show in the card? Esc when done", action = "toggle" })
@@ -428,17 +465,49 @@ local function open_plans(cx: WindowCx)
 		end)
 end
 
--- What `usage` in the widget bar opens.
+-- Alerts on or off (alerts.luau).
+local function open_alerts(cx: WindowCx)
+	local on = alerts.enabled()
+	local items: { PickItem } = {
+		{ label = "On", detail = ALERTS_DETAIL, current = on, on = true },
+		{ label = "Off", detail = "no toasts; the line and card still turn warning colors", current = not on, on = false },
+	}
+	cx:pick({ items = items, placeholder = "Toast when a window runs low?", icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item then
+				alerts.set_enabled((item :: any).on)
+				after_change(next_cx or cx)
+			end
+		end)
+end
+
+-- What a click on the widget bar's gauge opens.
 local function open_usage_opens(cx: WindowCx)
 	local current = load_settings().usage_opens
 	local items: { PickItem } = {}
 	for _, choice in data.USAGE_OPENS do
 		table.insert(items, { label = choice.label, detail = choice.detail, current = choice.id == current, opens = choice.id })
 	end
-	cx:pick({ items = items, placeholder = "What does usage in the widget bar open?", icon = "gauge" })
+	cx:pick({ items = items, placeholder = "What does a click on the gauge in the widget bar open?", icon = "gauge" })
 		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
 			if item then
 				store.set(data.KV_USAGE_OPENS, (item :: any).opens)
+				after_change(next_cx or cx)
+			end
+		end)
+end
+
+-- Show pace: which windows say their pace in the card and the quota details.
+local function open_pace(cx: WindowCx)
+	local current = load_settings().pace
+	local items: { PickItem } = {}
+	for _, choice in data.PACES do
+		table.insert(items, { label = choice.label, detail = choice.detail, current = choice.id == current, pace = choice.id })
+	end
+	cx:pick({ items = items, placeholder = "Which windows say their pace in the card?", icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item then
+				store.set(data.KV_PACE, (item :: any).pace)
 				after_change(next_cx or cx)
 			end
 		end)
@@ -488,6 +557,10 @@ end
 
 open_reorder = function(cx: WindowCx)
 	local providers = providers_in_order(load_settings())
+	if #providers < 2 then
+		cx:toast("info", "Nothing to reorder yet", "The order matters once omp's usage cache lists more than one provider")
+		return
+	end
 	cx:pick({ items = reorder_items(providers), placeholder = "Move which provider? Esc when done", icon = "list" })
 		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
 			if item == nil then
@@ -564,7 +637,7 @@ local function window_items(settings: Settings, provider: Provider): { PickItem 
 	for _, window in provider.windows do
 		table.insert(items, {
 			label = window_name(window.label) .. " window",
-			detail = string.upper(window.label) .. " · " .. tostring(window.pct) .. "% left",
+			detail = string.upper(window.label) .. " · " .. data.pct_text(window) .. (if window.passed then "" else " left"),
 			current = table.find(hidden, string.lower(window.label)) == nil,
 			pick = "window",
 			window = string.lower(window.label),
@@ -640,7 +713,7 @@ local function open_account_choices(cx: WindowCx, id: string, switches: boolean?
 		for _, window in provider.windows do
 			local owner, bare = account_of(window.label, provider.accounts)
 			if owner == name then
-				table.insert(parts, string.upper(bare :: string) .. " " .. tostring(window.pct) .. "%")
+				table.insert(parts, string.upper(bare :: string) .. " " .. data.pct_text(window))
 			end
 		end
 		return table.concat(parts, " · ")
@@ -774,6 +847,9 @@ return {
 	toggle_account = toggle_account,
 	toggle_plan = toggle_plan,
 	open_plans = open_plans,
+	open_alerts = open_alerts,
+	open_pace = open_pace,
+	ALERTS_DETAIL = ALERTS_DETAIL,
 	open_usage_opens = open_usage_opens,
 	move_account = move_account,
 	after_change = after_change,

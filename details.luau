@@ -21,6 +21,9 @@ export type Row = {
 	value: string?,
 	account_note: boolean?,
 	shared: boolean?,
+	-- a window's provider color (its palette's first), whatever tone its share takes: the details' swatch and
+	-- title take it
+	lit: string?,
 	-- hover only: a pill at the row's right end (an account's plan), icons drawn over blank cells of the row's
 	-- text (`cell`: the first of the icon's three cells; `kind`: "tokens" or "cost"), and on a heading, how many
 	-- rows (its own first) the bar in its provider's colors (`a`, `b`) runs beside
@@ -122,6 +125,13 @@ local CSS = [==[
 	font-variant-numeric: tabular-nums;
 	color: var(--t3);
 	overflow-wrap: anywhere;
+}
+/* numbers that are getting old: how old, in the warning tone, before the source's own stamp */
+[data-role='omp-usage.details'] .oud-stamp.oud-old {
+	color: var(--warn);
+}
+[data-role='omp-usage.details'] .oud-stamp + .oud-stamp {
+	margin-left: 0;
 }
 /* the account's windows: wells side by side, a column when the pane is narrow */
 [data-role='omp-usage.details'] .oud-windows {
@@ -343,11 +353,12 @@ local function metric(label: string, values: Amounts): Node?
 	return ui.el("div", { class = "oud-metric" }, children)
 end
 
--- An account's provider color: the first a provider's palette gives among its rows (its heading's, a saved
--- reset's, a window's while its share is fine), as the line paints it.
+-- An account's provider color: the first a provider's palette gives among its rows (a window's own, its
+-- heading's, a saved reset's, a window's while its share is fine), as the line paints it.
 local function account_color(account: Account): string?
 	local candidates: { string? } = {}
 	for _, window in account.windows do
+		table.insert(candidates, window.row.lit)
 		for _, row in window.notes do table.insert(candidates, row.color) end
 		table.insert(candidates, window.row.a)
 	end
@@ -425,16 +436,22 @@ local function view(rows: { Row }): (Node, string)
 		local plan: string? = nil
 		local conflicting_plan = false
 		local stamp: Row? = nil
+		local old: Row? = nil
 		for _, row in account.notes do
 			if row.kind == "plan" and row.value and not row.shared then
 				if plan and plan ~= row.value then conflicting_plan = true end
 				plan = row.value
 			elseif row.kind == "observed" and row.value and not row.shared and stamp == nil then
 				stamp = row
+			elseif row.kind == "as_of" and old == nil then
+				old = row
 			end
 		end
 		if plan and not conflicting_plan then
 			table.insert(heading, ui.el("span", { class = "oud-plan", text = plan }))
+		end
+		if old then
+			table.insert(heading, ui.el("span", { class = "oud-stamp oud-old", text = string.gsub(old.text, "^%s+", "") }))
 		end
 		if stamp then
 			table.insert(heading, ui.el("span", { class = "oud-stamp", text = string.gsub(stamp.text, "^%s+", "") }))
@@ -485,7 +502,7 @@ local function view(rows: { Row }): (Node, string)
 		if #wells > 0 then table.insert(body, ui.el("div", { class = "oud-windows" }, wells)) end
 		local notes: { Node } = {}
 		for _, row in account.notes do
-			if not (plan and not conflicting_plan and row.kind == "plan" and row.value == plan and not row.shared) and row ~= stamp then
+			if not (plan and not conflicting_plan and row.kind == "plan" and row.value == plan and not row.shared) and row ~= stamp and row ~= old then
 				table.insert(notes, note(row, lit))
 			end
 		end

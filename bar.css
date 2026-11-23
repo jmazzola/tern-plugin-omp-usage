@@ -16,3 +16,13 @@
 #widgetbar .wg-seg[title='plugin.omp-usage.update']:hover {
 	background-color: rgb(from var(--accent) r g b / 22%);
 }
+
+/* The usage segment (window.luau) is its gauge alone while no window runs ahead of its pace. Tern still lays out the
+   empty text after the icon, with its gap and the chip's wider text-side padding: take both back, so the gauge sits
+   in the middle of its chip (Chips) and no gap trails it (Divided). Tern titles a segment with its command. */
+#widgetbar .wg[data-widget='status'][data-style='chips'] .wg-seg:is([title='plugin.omp-usage.panel'], [title='plugin.omp-usage.details']) > .wg-status-text:empty {
+	margin: 0 -3px 0 -4px;
+}
+#widgetbar .wg[data-widget='status'][data-style='divided'] .wg-seg:is([title='plugin.omp-usage.panel'], [title='plugin.omp-usage.details']) > .wg-status-text:empty {
+	margin-left: -5px;
+}

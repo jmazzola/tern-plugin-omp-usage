@@ -142,19 +142,49 @@ scenarios.passed = async () => {
 
 scenarios.pace = async () => {
   const t = Date.now();
-  const on = await show(F.doc(t, { claude: F.claude(t, { r5: 0.2, in5: 2 * F.H }) }), (v) => v.card?.includes("× pace"));
-  const shots = [await snap("pace-on", true)];
-  profile.writeKv({ "omp-usage.show-pace": false });
-  const t0 = Date.now();
-  const off = await show(undefined, (v) => v.card && !v.card.includes("pace"), 20_000);
-  const offAfter = (Date.now() - t0) / 1000;
+  const rows = (view) => (view?.card ?? "").split("\n").filter((l) => l.includes("× pace")).map((l) => l.trim());
+  // A step's outcome: how long the card took to get there, else what it still shows. An idle headless window runs
+  // no plugin timers (lib.mjs demoStatus), so while a step waits it gives omp a new status to draw every 5 s, which
+  // lets the next poll run (a poll that reads a new cache draws it on the poll after). The line is drawn from the
+  // cache either way: its 5h window reads 20%, which no status here says.
+  let nudges = 0;
+  const step = async (kv, test) => {
+    profile.writeKv(kv);
+    const t0 = Date.now();
+    let view = null;
+    for (let i = 0; i < 9 && !view; i += 1) {
+      nudges += 1;
+      profile.setStatus(nudges % 2 ? DEFAULT_STATUS.replace("33%", "34%") : DEFAULT_STATUS);
+      view = await show(undefined, (v) => v.line.includes("20%") && test(v), 5_000);
+    }
+    const now = rows(view ?? profile.view()).join(" | ") || "no pace row";
+    return { ok: Boolean(view), text: view ? `after ${((Date.now() - t0) / 1000).toFixed(1)} s: ${now}` : `never; the card still shows: ${now}` };
+  };
+  const none = (v) => Boolean(v.card) && rows(v).length === 0;
+  const one = (v) => rows(v).length === 1 && rows(v)[0].includes("empty ~");
+  // 5h runs ahead (80% used, 3h of 5h gone); 7d and Fable 7d last past their resets
+  profile.writeCache(F.doc(t, { claude: F.claude(t, { r5: 0.2, in5: 2 * F.H, r7: 0.8, in7: 3.5 * F.D }) }));
+  const ahead = await step({}, one);
+  const shots = [await snap("pace-ahead", true)];
+  // the on/off setting from before the three choices still counts while no choice is stored
+  const before = await step({ "omp-usage.show-pace": false }, none);
+  const always = await step({ "omp-usage.pace": "always" }, (v) => rows(v).length === 3 && v.card.includes("0.4× pace · lasts past reset"));
+  shots.push(await snap("pace-always", true));
+  const off = await step({ "omp-usage.pace": "off", "omp-usage.show-pace": undefined }, none);
   shots.push(await snap("pace-off", true));
-  profile.writeKv({ "omp-usage.show-pace": undefined });
-  const back = await show(undefined, (v) => v.card?.includes("× pace"), 20_000);
+  const back = await step({ "omp-usage.pace": "ahead" }, one);
+  profile.writeKv({ "omp-usage.pace": undefined });
+  profile.setStatus(DEFAULT_STATUS);
   record(
-    "Show pace on/off redraws the card at once",
-    Boolean(on && off && back),
-    `on: ${on?.card?.split("\n").find((l) => l.includes("pace")) ?? "no pace row"}\noff (setting written by another window): pace gone after ${off ? offAfter.toFixed(1) + " s" : "never"}\nback on: ${back ? "yes" : "no"}`,
+    "Show pace Off / When ahead / Always each redraw the card",
+    Boolean(ahead.ok && before.ok && always.ok && off.ok && back.ok),
+    [
+      `nothing stored (When ahead): ${ahead.text}`,
+      `the old on/off setting, off, with no choice stored: ${before.text}`,
+      `Always, over the old setting: ${always.text}`,
+      `Off: ${off.text}`,
+      `When ahead: ${back.text}`,
+    ].join("\n"),
     shots
   );
 };
@@ -299,64 +329,60 @@ scenarios.model_switch = async () => {
 
 scenarios.widget = async () => {
   a.ctl("widgets", "set", "status");
-  const t = Date.now();
-  await show(F.doc(t, { claude: F.claude(t, { r5: 0.62, r7: 0.41 }) }), (v) => v.line.includes("41% left"));
-  const find = () => {
-    const nodes = a.tree("*").filter((n) => /^(Claude \d+%|Claude <1%|usage)$/.test(n.text ?? ""));
-    return nodes[0] ?? null;
-  };
-  // the segment's text color, as Tern computed it (its tone): every element inside its box
+  // omp Usage's segment among the Plugin segments: Tern titles a segment with the command its click runs.
+  const find = () => a.tree("#widgetbar .wg-seg").find((n) => /^plugin\.omp-usage\.(panel|details)$/.test(n.title ?? "")) ?? null;
+  // the segment's color, as Tern computed it (its tone): the segment and every element inside its box
   const colorOf = (node) => {
-    if (!node) return null;
     const [x, y, w, h] = node.rect;
-    const inside = (a.ctl("dump", ".wg, .wg *").elements ?? []).filter((e) => e.visible && e.rect[0] >= x - 1 && e.rect[1] >= y - 1 && e.rect[0] + e.rect[2] <= x + w + 1 && e.rect[1] + e.rect[3] <= y + h + 1);
+    const inside = (a.ctl("dump", "#widgetbar .wg-seg, #widgetbar .wg-seg *").elements ?? []).filter((e) => e.visible && e.rect[0] >= x - 1 && e.rect[1] >= y - 1 && e.rect[0] + e.rect[2] <= x + w + 1 && e.rect[1] + e.rect[3] <= y + h + 1);
     return [...new Set(inside.map((e) => e.color))].join(" / ") || null;
   };
-  const normal = await waitFor(find, 15_000, 300);
-  const normalColor = colorOf(normal);
+  // Waits until the segment reads `text` ("": its gauge alone), and returns it with its color then; null if it never
+  // does. An idle headless window runs no plugin timers (lib.mjs demoStatus), so each try gives omp a new status to
+  // draw, which lets the next poll run.
+  let nudges = 0;
+  const reads = async (text) => {
+    for (let i = 0; i < 8; i += 1) {
+      nudges += 1;
+      profile.setStatus(nudges % 2 ? DEFAULT_STATUS.replace("33%", "34%") : DEFAULT_STATUS);
+      const node = await waitFor(() => {
+        const seg = find();
+        return seg && (seg.text ?? "") === text ? seg : null;
+      }, 5_000, 300);
+      if (node) return { ...node, color: colorOf(node) };
+    }
+    return null;
+  };
+  const said = (node) => (node ? `"${node.text ?? ""}", ${node.rect[2]}px wide, color ${node.color}` : `not seen; the segment reads "${find()?.text ?? ""}"`);
+  // every window keeps pace (7d, the closest, at 1.08×)
+  const t = Date.now();
+  await show(F.doc(t), (v) => v.line.includes("62% left"));
+  const calm = await reads("");
+  // 8% left, but on pace (0.95×: 92% used with 4h 50m of 5h gone): Tern's own usage widgets show the share
   const t2 = Date.now();
-  await show(F.doc(t2, { claude: F.claude(t2, { r5: 0.57, r7: 0.58, rf: 0.9 }) }), (v) => v.line.includes("57% left"));
-  const odd = await waitFor(() => {
-    const node = find();
-    return node && node.text !== normal?.text ? node : null;
-  }, 15_000, 300);
+  await show(F.doc(t2, { claude: F.claude(t2, { r5: 0.08, in5: 10 * F.M }) }), (v) => v.line.includes("8% left"));
+  const low = await reads("");
+  // 5h at 1.3× (80% used, 3h of 5h gone), 7d at 1.6× (80% used, half of it gone): the furthest ahead
   const t3 = Date.now();
-  await show(F.doc(t3, { observed: t3 - 11 * F.M }), (v) => v.dim);
-  const muted = await waitFor(() => {
-    const node = find();
-    return node && node.text === "Claude 41%" && colorOf(node) !== normalColor ? node : null;
-  }, 20_000, 500);
-  const mutedColor = colorOf(muted);
-  const t4 = Date.now();
-  await show(F.doc(t4, { claude: F.claude(t4, { r5: 0.2 }) }), (v) => v.line.includes("20% left"));
-  const warn = await waitFor(() => {
-    const node = find();
-    return node && node.text === "Claude 20%" ? node : null;
-  }, 15_000, 300);
-  const warnColor = colorOf(warn);
-  const t5 = Date.now();
-  await show(F.doc(t5, { claude: F.claude(t5, { r5: 0.08 }) }), (v) => v.line.includes("8% left"));
-  const low = await waitFor(() => {
-    const node = find();
-    return node && node.text === "Claude 8%" ? node : null;
-  }, 15_000, 300);
-  const lowColor = colorOf(low);
-  const png = a.shot("widget-low");
+  await show(F.doc(t3, { claude: F.claude(t3, { r5: 0.2, in5: 2 * F.H, r7: 0.2, in7: 3.5 * F.D }) }), (v) => v.line.includes("20% left"));
+  const ahead = await reads("Claude 1.6× pace");
+  const png = a.shot("widget-ahead");
   record(
-    "widget bar shows the number, warn/error tones and mute",
-    Boolean(normal?.text === "Claude 41%" && muted && warn && low && new Set([normalColor, mutedColor, warnColor, lowColor]).size === 4),
-    [
-      `fresh: "${normal?.text ?? "segment not found"}" color ${normalColor}`,
-      `11 min old: "${muted?.text ?? "not muted within 20 s"}" color ${mutedColor}`,
-      `20% left: "${warn?.text ?? "?"}" color ${warnColor}`,
-      `8% left: "${low?.text ?? "?"}" color ${lowColor}`,
-    ].join("\n"),
+    "widget bar: the gauge alone while windows keep pace, a warning while one runs ahead",
+    Boolean(calm && low && ahead && calm.color !== ahead.color && calm.rect[2] < ahead.rect[2]),
+    [`on pace: ${said(calm)}`, `8% left, on pace: ${said(low)}`, `5h at 1.3×, 7d at 1.6×: ${said(ahead)}`].join("\n"),
     [png]
   );
+  profile.writeKv({ "omp-usage.pace": "off" });
+  const off = await reads("");
+  profile.writeKv({ "omp-usage.pace": "always" });
+  const always = await reads("Claude 1.6× pace");
+  profile.writeKv({ "omp-usage.pace": undefined });
+  profile.setStatus(DEFAULT_STATUS);
   record(
-    "widget bar agrees with the line (57% left)",
-    odd?.text === "Claude 57%",
-    `line says 57% left; widget says "${odd?.text ?? "not found"}"`,
+    "widget bar follows Show pace",
+    Boolean(off && always),
+    [`Off: ${said(off)}`, `Always: ${said(always)}`].join("\n"),
     []
   );
 };

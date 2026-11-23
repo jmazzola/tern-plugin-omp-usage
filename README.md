@@ -2,21 +2,28 @@
 
 Your omp usage limits, right above the omp composer's context bar in [Tern](https://stencil.so/tern):
 
-<img src="docs/images/line-current.png" alt="The usage line above the omp composer, on its glass strip: Claude's 7-day window with its bar, 54% left, a 4d 5h countdown and a saved reset (+1), then the Fable 7-day window at 14% left" width="722">
+<img src="docs/images/line-current.png" alt="The usage line above the omp composer, on its glass strip: Claude's 7-day window at 35% left with a 2h 12m countdown and a saved reset (+1), then the Fable 7-day window, used up, at 0% left in red" width="748">
+
+## Quick start
+
+1. In a terminal (or Tern's Preferences › Plugins › Install):
+
+   ```sh
+   tern plugin install github.com/jmazzola/tern-plugin-omp-usage
+   ```
+
+2. **Restart your omp sessions** when the toast says it's installed.
+3. Click into an omp pane. Within a few seconds the line shows above the context bar (`2% ──── 1M`). Hover it for
+   the card, press Alt+Shift+U for the quota details and Ctrl+Alt+U for the settings.
+
+You need Tern with plugins on, and omp signed in to an account with limits (`omp usage` should list them) or an
+[external quota source](#external-quota-sources). [Install](#install) has the details and what to do when it can't
+set itself up.
+
+## What it does
 
 Tern's widget bar can show stats too, but it lives at the edge of the window. This sits right where you're already
 looking while you work: above the composer, every time you glance down, without leaving the session.
-
-In the Spine chat style it sits just under the bar instead, on the composer's column, out of the way of omp's working
-status:
-
-<img src="docs/images/line-spine.png" alt="Spine chat style: omp's working status above the context bar, and the usage line under the bar on its glass strip, lined up with the composer's input: Claude's 7-day window with a saved reset (+1) and the Fable 7-day window at 14% left" width="532">
-
-Hover it for your plan and each window's meter, reset time and saved resets:
-
-<img src="docs/images/card-current.png" alt="The hover card over a chat: Claude usage with a gold Ultra pill on its title, the weekly window at 53% left with its reset time and then a saved reset expiring Dec 10, and the Fable weekly window at 14% left with its reset time" width="722">
-
-What it does:
 
 - follows your model: the active model's provider (anything `omp usage` reports - Claude, Codex, Kimi, Gemini, Grok,
   Muse Code, …), switching within ~2 s of Alt+P, or a subagent's model while you're viewing its transcript. New
@@ -24,7 +31,13 @@ What it does:
 - several accounts on one provider: all of them (`Claude dev.ops 5H … · a.k.chen 5H …`), only the one you pick, or
   combined into one set of windows (all in one, or by plan). Switch any of them off to leave it out.
 - reads at a glance: a bar per window in its provider's colors, amber at 25% left, red at 10%. When a share changes,
-  a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
+  a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets). Shares round
+  down (99.6% reads 99%), and `<1%` means a little is left.
+- [pace](#pace): when you're using a window up faster than its time runs out, the card says how fast and when it
+  would run dry (`1.2× pace · empty ~2d`). **Show pace** can show it for every window, or turn it off.
+- [honest about old numbers](#how-old-the-numbers-are): numbers older than 10 minutes fade and say how old they are
+  (`as of 21m ago`), and after 30 minutes the line goes back to omp's own status. A window whose reset time has
+  passed reads `reset` until new numbers come.
 - puts what limits you first: on a Fable or Mythos model, the Fable weekly window leads the line
 - stays readable: the line sits on a frosted glass strip (or a solid one, or none), so the chat scrolling under the
   composer doesn't show through it
@@ -33,16 +46,18 @@ What it does:
 - each account's plan (`Ultra`, `Pro 200`) on its heading, wherever the provider says which plan it is; switch any of
   them off in the panel
 - quota details (Alt+Shift+U): every account and window in full, in a view of its own
+- [the widget bar](#widget-bar): a gauge that stays quiet until a window in the focused omp pane runs ahead of its
+  pace, then warns (`Claude 1.4× pace`). Shares and resets are left to Tern's own usage widgets
+- [alerts](#alerts), if you turn them on: one toast when a window falls to 25%, 10% or 0% left, and before a saved
+  reset expires
 - CLIProxyAPI and CPA Usage Keeper, if you use them: their accounts next to omp's own, and from Keeper, the tokens
   and API-equivalent cost each window has used and roughly what's left
 - the same numbers in every pane, even though every omp session checks usage on its own clock
-- a settings panel (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors, and the line's
-  background
+- a settings panel (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors, the line's background,
+  pace, the widget bar and alerts
 - installs from Tern and sets up its own omp extension
 - updates itself like Tern does: an **Update omp Usage** pill in the widget bar, one click to see what's new and
   install it. Nothing pops up over your work.
-
-<img src="docs/images/update-card.png" alt="The update card: omp Usage 0.3.0 is available, You have 0.2.0 · 6 new commits, What's new with each commit's full message, and Download Update, Skip This Version and Not Now" width="991">
 
 ## Install
 
@@ -57,12 +72,13 @@ usage` should list them) or an [external quota source](#external-quota-sources).
    ```
 
    A few seconds later it runs `omp plugin link` on its `omp/` folder, so omp loads the extension as its own plugin,
-   `omp-usage`, straight from the plugin's folder. Updates reach omp the same way. Then it tells you:
+   `omp-usage`, straight from the plugin's folder. Updates reach omp the same way. With several Tern windows open,
+   only one of them does it. Then it tells you:
 
    <img src="docs/images/toast-installed.png" alt="The toast omp Usage is installed, Restart omp sessions to see the usage line" width="540">
 
-   It runs the `omp` on Tern's `PATH`, or else the omp Tern manages itself. If it can't (usually because neither is
-   there), it says that instead, and Tern's log has the reason and the exact command to run:
+   It runs the `omp` on Tern's `PATH`, or Tern's own omp when that one is missing or can't list plugins. If neither
+   works, it says so instead, and Tern's log has the reason and the exact command to run:
 
    <img src="docs/images/toast-extension-failed.png" alt="The error toast omp Usage couldn't set up its omp extension, Tern's log says why, and what to run" width="576">
 
@@ -70,17 +86,7 @@ usage` should list them) or an [external quota source](#external-quota-sources).
    enable omp-usage` turns it back on. omp Usage leaves the link however you set it. If you `omp plugin uninstall
    omp-usage` and want it back, run **omp Usage: Set up omp extension** from Tern's palette.
 
-2. **Turn on extension statuses** in omp's bar, which is where the plugin reads the line from. Either:
-
-   ```yaml
-   # ~/.omp/agent/config.yml
-   statusLine:
-     showHookStatus: true
-   ```
-
-   or, with `preset: custom`, add `status` to `leftSegments`.
-
-3. **Restart your omp sessions.** Click into an omp pane and the line shows up above `1% ──── 1M` (under it in
+2. **Restart your omp sessions.** Click into an omp pane and the line shows up above `1% ──── 1M` (under it in
    Spine) within a few seconds.
 
 ### From a clone
@@ -94,34 +100,28 @@ cd tern-plugin-omp-usage
 tern plugin link .
 ```
 
-Then have omp load the extension from the clone, and do steps 2 and 3 above:
+Then have omp load the extension from the clone, and restart your omp sessions:
 
 ```sh
 omp plugin link ./omp
 ```
 
-Naming `omp/extensions/usage-remaining.js` under `extensions:` in `~/.omp/agent/config.yml` works too. An installed
-copy then skips linking its own, so omp never runs it twice.
+Naming `omp/extensions/usage-remaining.js` under `extensions:` in `~/.omp/agent/config.yml` works too (a line
+that's commented out doesn't count). An installed copy then skips linking its own, so omp never runs it twice.
 
-> [!WARNING]
-> **The `omp-usage` folder is deprecated.** Since 0.5.0 the plugin is the repo itself. Clones linked to
-> `…/tern-plugin-omp-usage/omp-usage` (the old install) relink to the repo folder on their own when they update to
-> 0.5.0, and a toast says so:
->
-> <img src="docs/images/toast-moved.png" alt="The toast omp Usage moved to its repo's root, Linking the repo folder in its place; no need to do anything" width="520">
->
-> If that fails, a toast tells you where to run `tern plugin link .` yourself:
->
-> <img src="docs/images/toast-link-failed.png" alt="The error toast omp Usage couldn't link its repo's root, In the tern-plugin-omp-usage folder, run: tern plugin link ." width="520">
->
-> The folder goes away in a later release, and a clone still linked to it stops loading then. `tern plugin list`
-> shows which folder yours is using.
+A clone from before 0.5.0 may still be linked to its old `omp-usage` folder, which is gone now: run
+`tern plugin link .` in the repo folder.
 
 ## The line and its card
 
 Each provider gets its label, then each window gets its label, a bar filled to the share left, the share, and a
-countdown to its reset. Saved resets come after as `+N` (`+NF` for Claude's Fable resets), and any other statuses
-omp's extensions set go last.
+countdown to its reset. Saved resets come after as `+N` (`+NF` for Claude's Fable resets). While omp shows extension
+statuses in its bar (it does unless you turned them off), any other statuses omp's extensions set go last.
+
+In the Spine chat style it sits just under the bar instead, on the composer's column, out of the way of omp's working
+status:
+
+<img src="docs/images/line-spine.png" alt="Spine chat style: omp's working status above the context bar, and the usage line under the bar on its glass strip, lined up with the composer's input: Claude's 7-day window with a saved reset (+1) and the Fable 7-day window at 14% left" width="532">
 
 Windows go shortest first, except while a Fable or Mythos model is active: then the Fable weekly window it draws on
 leads, on the line and in the card:
@@ -130,7 +130,8 @@ leads, on the line and in the card:
 
 A window at 25% left or less turns amber, and at 10% or less, red. When a share actually changes, the line prints
 again while a comet runs the bar to its new level: in the provider's color when quota went down, green when it came
-back. With Reduce Motion on (Tern's or the system's), nothing moves.
+back. With Reduce Motion on (Tern's or the system's), nothing moves. Once a window's reset time has passed, it reads
+`reset` (`5H reset`) until omp fetches its new numbers.
 
 Tern's chats scroll under the composer, so the line sits on a frosted glass strip that blurs whatever is behind it.
 **Line background** in the panel makes it Solid, or Clear (no background at all). Here's the same moment Clear, then
@@ -138,12 +139,17 @@ Glass:
 
 <img src="docs/images/line-background.png" alt="The usage line over a line of command output scrolling under the composer: on top, Clear, the line's text tangled with the output's; below, Glass, the line on a frosted strip with the output blurred away behind it" width="722">
 
-Hover the line and after a beat the card opens: a row and a meter per window, its reset countdown and clock time, then
-when each saved reset expires, and the other statuses. The last row names the shortcuts for the quota details and the
-settings. The card can take up to the number of rows you set in the panel (26 by default). Past that, accounts sum up
-to a row each, and then the last few fold into one (`+4 more accounts · lowest 7D 5%`). With several providers or
-accounts, each gets a heading in the title's color, and a bar in its provider's colors down the card's edge beside its
-rows (there's a picture under [Settings](#settings)).
+Hover the line and after a beat the card opens: a row and a meter per window, its reset countdown and clock time, its
+pace, then when each saved reset expires, and the other statuses. The last row names the shortcuts for the quota
+details and the settings:
+
+<img src="docs/images/card-current.png" alt="The hover card over a chat: Claude usage with a gold Ultra pill, the weekly window at 35% left resetting in 3d 5h, an amber row 1.2× pace · empty ~2d under it, a saved reset expiring Dec 10, and the Fable weekly window at 0% left in red" width="748">
+
+The card can take up to the number of rows you set in the panel (26 by default). Past that, accounts sum up to a row
+each, and then the last few fold into one (`+4 more accounts · lowest 7D 5%`). With several providers or accounts,
+each gets a heading in the title's color, and a bar in its provider's colors down the card's edge beside its rows
+(there's a picture under [Settings](#settings)). A window whose reset has passed says so: `reset 1:41 AM · waiting
+for new numbers`.
 
 Each account's heading carries its plan as a gold pill (the title does, when the card shows a single account),
 whenever its provider says which plan it's on. omp reports it for Claude (since omp 19), Codex, Z.ai, Kiro, Gemini
@@ -156,14 +162,76 @@ Where Keeper has an estimate, the tokens and API-equivalent value left go under 
 <img src="docs/images/hover-summary.png" alt="Quota hover summary over the usage line: Codex@dashboard usage with a gold Pro 200 pill, the weekly window at 71% left, under its bar a tokens icon with 633.03M and a dollar icon with $533.09, then the reset time, one saved reset and a last row naming the details and settings shortcuts" width="312">
 
 Clicking the line does nothing - it's drawn over omp's composer, and Tern doesn't give plugins clicks there. Use the
-shortcuts, or `usage` in the widget bar.
+shortcuts, or the gauge in the widget bar.
+
+### Pace
+
+A window you're using up faster than its time runs out gets a pace row in the card and the quota details:
+`1.2× pace · empty ~2d` means you've used it 1.2 times as fast as would last until its reset, and at that rate it runs
+out in about two days, before it resets. It shows from 1.1× on. When, at that rate, it would already have run out
+(the numbers are old), it says the rate alone (`1.5× pace`). In the first tenth of a window, or once a window is used
+up, there's nothing. Pace never goes on the line. The [widget bar](#widget-bar) warns about it, though.
+
+It's worked out from when omp observed the numbers, so old numbers don't skew it.
+
+**Show pace** in the panel (or **omp Usage: Settings… › Show pace…**) picks which windows get the row:
+
+| Show pace | What you see |
+| --- | --- |
+| **Off** | No pace rows, and no warning in the widget bar |
+| **When ahead** (default) | A row only for a window at 1.1× or more, in the warning color. A window that keeps pace says nothing |
+| **Always** | A row for every window. One that will outlast its time reads `0.4× pace · lasts past reset`, in the same quiet tone as its reset time. Between 1× and 1.1× it says when it would run out, still quiet; from 1.1× on it turns to the warning color |
+
+### How old the numbers are
+
+omp checks usage every few minutes, so numbers up to about 7 minutes old are normal. Past 10 minutes since omp
+fetched them, they fade on the line and in the card, and say how old they are: in the card's title when everything it
+shows is old, else under the provider that is, and in the quota details beside its heading.
+
+<img src="docs/images/card-age.png" alt="The hover card with 21-minute-old numbers: its title reads Claude usage · as of 21m ago in amber over the weekly and Fable weekly windows, and the line under it is faded" width="748">
+
+Past 30 minutes they're not shown at all, and the line falls back to the session's own status in omp's bar. Numbers
+stay old when `omp usage` keeps failing (offline, an expired login), even while omp sessions keep running.
+
+## Widget bar
+
+Tern has its own AI usage widgets, and they already show each provider's share and when it resets. So omp Usage's
+segment in the widget bar only says what they don't: whether you're using a window up too fast.
+
+Most of the time it's just a gauge. While a window in the focused omp pane runs ahead of its [pace](#pace) (1.1× or
+more), it turns amber and names the provider and the rate:
+
+<img src="docs/images/widget-bar.png" alt="Tern's widget bar under an omp composer on Opus 5.5: omp Usage's segment, a gauge icon and Claude 1.3× pace, in amber" width="400">
+
+With several windows ahead, it names the one furthest ahead, and when two read the same, the one that would run out
+first. It follows **Show pace**: set to Off, it never warns. While every window keeps pace, the gauge sits there
+alone:
+
+<img src="docs/images/widget-bar-quiet.png" alt="The same widget bar under a composer on GPT-6 Luna, whose weekly window keeps pace: the segment is its gauge icon alone" width="400">
+
+Clicking it opens the settings panel, or the quota details if you set it to (**Widget bar** in the panel).
+
+Tern only shows plugin segments in its **Plugin segments** widget, which you have to place yourself (palette › **Edit
+widgets…**), and the gauge shows there while an omp pane has focus.
+
+## Alerts
+
+Off until you turn them on: **Alerts** in the panel, or **omp Usage: Settings… › Alerts…**. Then a toast says when a
+window falls to 25%, 10% or 0% left, once for each in a reset period, and when a saved reset expires within a day:
+
+<img src="docs/images/toast-alert.png" alt="The error toast Claude Fable 7d is used up, Resets in 2h 14m, at 5:42 AM" width="454">
+
+- Turning them on doesn't toast what's already low, only what crosses a threshold from then on.
+- One toast for each, however many Tern windows are open. Several at once share a toast (`Also Claude 7d 24% left`).
+- They watch every provider and account omp Usage has numbers for, shown on the line or not, as long as the numbers
+  are less than 30 minutes old.
 
 ## Quota details
 
 Every account and window in full, in a view of its own, with no row limit. Open it with:
 
 - Alt+Shift+U (rebind `plugin.omp-usage.details`)
-- `usage` in the widget bar, if you set it to open the quota details (see [Settings](#settings))
+- the gauge in the widget bar, if you set it to open the quota details (see [Settings](#settings))
 - **Quota details** at the end of the settings panel's bottom bar
 - **omp Usage: Quota details** in the palette
 
@@ -171,13 +239,14 @@ It opens over the tab. Click outside it or press Esc to close it, or drag its he
 swaps it for the settings panel (and the panel's **Quota details** swaps right back); **Close** closes it.
 
 Each provider or account gets a heading in its own color, then a box per window, side by side while they fit: the
-share, a bar in the line's colors, and its resets and notes. A window running low is ringed amber, and red when it's
-nearly empty. It always shows the same providers, accounts and windows as the line.
+share, a bar in the line's colors, and its resets, pace and notes. A window running low is ringed amber, and red when
+it's nearly empty. Numbers older than 10 minutes get their age beside the heading. It always shows the same
+providers, accounts and windows as the line.
 
-Each account's heading also gets its plan as a chip when its provider names one. Here are Claude, Codex and Muse
-with All providers, Muse's 5-hour window running low:
+Each account's heading also gets its plan as a chip when its provider names one. Here are Claude and Codex with All
+providers, Claude's weekly window running ahead of its pace and Codex's numbers 14 minutes old:
 
-<img src="docs/images/details-plans.png" alt="Quota details for Claude, Codex and Muse: each heading with its color and a plan chip (Max, Pro 200, Power Usage); Claude's 5-hour, weekly and Fable weekly windows in boxes with their resets, a saved reset and two Fable resets; Codex's weekly window with two saved resets; Muse's 5-hour window ringed amber at 18% left beside its weekly window at 100%" width="825">
+<img src="docs/images/details-plans.png" alt="Quota details for Claude and Codex: Claude with its Ultra chip, the weekly window at 35% left with its reset, a 1.2× pace · empty ~2d row and a saved reset, beside the Fable weekly window ringed red at 0% left; Codex with its Pro 200 chip and an amber as of 14m ago at the right of its heading, its weekly window at 74% left with three saved resets" width="800">
 
 With a [CLIProxyAPI or Keeper](#external-quota-sources) source, the heading also says when the account's numbers
 were observed, notes call out a stale or failing source, and windows Keeper has usage for get **Observed usage** and
@@ -190,9 +259,7 @@ were observed, notes call out a stale or failing source, and windows Keeper has 
 Open the panel with:
 
 - Ctrl+Alt+U (rebind `plugin.omp-usage.panel`)
-- `usage` in the widget bar, unless you set it to open the quota details instead (**Widget bar** below). Tern only
-  shows plugin segments in its **Plugin segments** widget, which you have to place yourself (palette › **Edit
-  widgets…**), and `usage` shows there while an omp pane has focus.
+- the gauge in the widget bar, unless you set it to open the quota details instead (**Widget bar** below)
 - **Settings** in the quota details
 - **omp Usage: Settings panel** in the palette
 
@@ -200,19 +267,25 @@ Changes apply right away, in every window.
 
 | Section | What it does |
 | --- | --- |
-| Preview | The line and its card, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default. An estimate under a bar takes a row; everything else Keeper reports goes in the quota details. Then **Line background**: Glass (default), Solid, or Clear |
+| Preview | The line and its card, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default. An estimate under a bar takes a row; everything else Keeper reports goes in the quota details. Then **Line background**: Glass (default), Solid, or Clear. Then **Show pace**: Off, When ahead (default), or Always (see [Pace](#pace)) |
 | Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers**. When there's no quota data for them, the line falls back to the focused session's own status |
 | Providers | Pick a row up by its grip, then click where it goes. Click a window to hide or show it everywhere. The switch adds the provider to Selected. A provider or account whose plan is known shows it as a gold pill beside its switch: click the pill to leave that plan out of the card and the quota details (it fades and is struck through), again to show it. With several accounts, each one gets its own row: grip, name (click it to show only that account, again for all), windows, plan, and a switch that takes it off the line, the card and the quota details. A chip next to the provider says what's showing, with a button for the next option: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 2 Max, 4 Pro, 4 Ultra ✕` (or `by plan · 6 with 5H, 4 without ✕`) with **all in one**, or `only dev.ops ✕`. Grouped by windows, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`). A custom color that's nearly white gets a darker shade in the light theme, and one that's nearly black a lighter one in the dark theme, so it never vanishes into the card |
-| Widget bar | What `usage` in the widget bar opens: **Settings panel** (default) or **Quota details** |
+| Widget bar | What a click on the gauge in the widget bar opens: **Settings panel** (default) or **Quota details** (see [Widget bar](#widget-bar)) |
+| Alerts | **Toast when a window runs low**: Off (default) or On (see [Alerts](#alerts)) |
 | Updates | Status, **Check for Updates** or **Download Update**, and how often to check (see [Update](#update)) |
 
 External quota sources are set up in a file, not the panel (see [External quota sources](#external-quota-sources)).
 Their accounts show up under Providers like omp's own.
 
-<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line with its card open, the Card height and Line background pills, the Show choices, providers with grips, their window toggles (Muse's 5H hidden and struck through), their plans (Max, Pro 200, Power Usage) and Selected switches, and color swatches" width="598">
+<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line with its card open, Claude's weekly window with a saved reset, its Fable weekly window with a 1.2× pace · empty ~2d 3h row, and Codex's weekly window with four saved resets; the Card height and Line background pills; Show pace with three pills, Off, When ahead (picked) and Always; the Show choices with All providers picked; Claude and Codex with their windows' shares, plan pills and Selected switches; and their color swatches" width="605">
 
-Prefer the keyboard? **omp Usage: Settings…** in the palette has all the same options as menus.
+Further down, the Widget bar and Alerts sections, here with alerts on:
+
+<img src="docs/images/settings-alerts.png" alt="The settings panel's Widget bar section, which says its Plugin segments widget shows a gauge, and a warning like Claude 1.4× pace while a window in the focused omp pane runs ahead, and where a click opens the Settings panel (picked) or the Quota details; and its Alerts section with Toast when a window runs low switched On and what it toasts" width="605">
+
+Prefer the keyboard? **omp Usage: Settings…** in the palette has all the same options as menus. **Plans…** and
+**Reorder providers…** only show when there's something to pick or reorder.
 
 **All providers**, one after another. Each provider's heading carries its plan, with a bar in its colors beside its
 rows:
@@ -242,7 +315,7 @@ into one:
 In the panel, click an account's name to show only that one (click it again, or the chip next to the provider, to go
 back to all of them). The switches take accounts off the line and the card:
 
-<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the chip only dev.ops beside Claude; a row per account with its grip, name, windows, plan and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; the preview shows only dev.ops on the line and in its card" width="598">
+<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the preview shows only dev.ops on the line and in its card, with pace rows under its weekly and Fable weekly windows, and the others summed up a row each; under it the Card height and Line background pills and Show pace's Off, When ahead (picked) and Always pills; then the chip only dev.ops beside Claude and a row per account with its grip, name, windows, plan and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; Codex below" width="605">
 
 That gives the line room for all of that account's windows, and the card sums up the others in a row each:
 
@@ -250,9 +323,10 @@ That gives the line room for all of that account's windows, and the card sums up
 
 **Combine** shows all of a provider's accounts as one: each window's share is the average of the accounts that have
 it, its reset is the soonest one, and its saved resets are all of theirs added up. A window only some of the accounts
-have says how many:
+have says how many. An account with no current numbers (a source that went stale, say) is left out of the averages,
+and a note names it:
 
-<img src="docs/images/card-combined.png" alt="Ten Claude accounts combined: the line shows Claude 10 accounts 5H 64%, 7D 51% +6; the card has 10 accounts with a 5-hour window (6 of the 10 accounts), a weekly window with 6 saved resets and a Fable weekly window with 4 Fable resets" width="720">
+<img src="docs/images/card-combined.png" alt="Ten Claude accounts combined, one of them without current numbers: the line shows Claude 9 accounts 5H 64%, 7D 56% +6; the card has 9 accounts with a 5-hour window (6 of the 9 accounts), a weekly window with 6 saved resets, a Fable weekly window with 4 Fable resets, and an amber note: 9 of 10 accounts · no current numbers for max-plan-2" width="748">
 
 **By plan** groups the accounts by the plan their provider says they're on. Here, 2 accounts are on Max, 4 on Pro and
 4 on Ultra, which has no 5-hour window:
@@ -306,19 +380,25 @@ The plugin checks its repo every 6 hours (or Hourly, Daily, Weekly, or Off in th
 and an installed copy checks a copy of the repo it keeps in its data folder. When there's a new version, a toast says
 so once, and an **Update omp Usage** pill sits in the widget bar until you deal with it:
 
-<img src="docs/images/update-status.png" alt="The settings panel's Updates section, omp Usage 0.5.4 is available, You have 0.5.3, with Download Update and What's New, and the Update omp Usage pill at the right of the widget bar" width="495">
+<img src="docs/images/update-status.png" alt="The settings panel's Updates section: omp Usage 0.8.0 is available, You have 0.7.10, with Download Update and What's New, the Check automatically pills on Every 6 hours, and in the widget bar below, the Update omp Usage pill beside omp Usage's gauge, warning Claude 1.3× pace in amber" width="527">
 
-The pill and `usage` are plugin segments, so they only show while the widget bar has its **Plugin segments** widget
+The pill and the gauge are plugin segments, so they only show while the widget bar has its **Plugin segments** widget
 (palette › Edit widgets…).
 
-Click the pill (or **Check for Updates**) for the update card at the top of this page: the version that's out, the
-one you have, and every new commit in full.
+Click the pill (or **What's New**, or **Check for Updates**) for the update card: the version that's out, the one you
+have, and every new commit in full.
+
+<img src="docs/images/update-card.png" alt="The update card: omp Usage 0.8.0 is available, You have 0.7.10 · 1 new commit, and under What's new the commit 0.8.0: Show pace, fade old numbers and update safely, with its list of changes (pace in the hover card and quota details, shown when you're ahead, for every window or not at all; the widget bar's warning when a window runs ahead of its pace; opt-in alerts; fading old numbers; reset times; the line no longer running into omp's own rows above the composer; safe updates; fewer omp usage runs; no extension statuses to turn on) and Restart your omp sessions after updating, then Download Update, Skip This Version and Not Now" width="926">
 
 | Button | What it does |
 | --- | --- |
 | **Download Update** | Brings the plugin (and an installed copy's omp extension) up to date and reloads it. The toast says if omp sessions need a restart |
 | **Skip This Version** | Hides the pill until the next plugin change |
 | **Not Now** / Esc | Closes the card. The pill stays |
+
+**Restart your omp sessions after an update** that changes the omp extension. A running session keeps the extension
+it started with, and once the extension's files change it stops writing the numbers every pane reads, so the line
+fades and then falls back to omp's own status until you do.
 
 Open settings panels step aside while the update lands, so nothing flashes half-drawn:
 
@@ -330,15 +410,32 @@ after the plugin's folder moved:
 
 <img src="docs/images/toast-extension-updated.png" alt="The toast omp Usage updated its omp extension, Restart omp sessions to use it" width="549">
 
+The panel's Updates section says where things stand:
+
+| It says | Meaning |
+| --- | --- |
+| **omp Usage 0.8.0 is up to date** · Checked 5m ago | The last check worked and found nothing new. It only says up to date after a check that worked |
+| **omp Usage 0.8.1 is available** · You have 0.8.0 | An update is waiting: **Download Update** or **What's New** |
+| **Skipped 0.8.1** | You skipped that version. **Check for Updates** offers it again |
+| **Couldn't check for updates**, with the reason | The last check failed: offline, no git, no upstream. Try again in a moment |
+| **This clone has commits of its own** | Your clone has commits the repo doesn't. Merge by hand: `git pull` |
+| **Finishing the update to 0.8.1** | An installed copy whose update was cut short (Tern closed, a reload) finishes it as soon as it can |
+
+And the toasts an update can bring: **omp Usage updated to X** when it's done, **omp Usage didn't update** with the
+reason when nothing changed, **omp Usage finished updating to X** when an update that was cut short finishes on the
+next load, and **omp Usage couldn't finish updating to X** with the reason when that fails (the next load or check
+tries again). **omp Usage is up to date** answers a check you asked for.
+
 A few things to know:
 
-- commits that only touch the README, `docs/` or `.omp/` don't count. They don't light the pill, and come along with
-  the next real update.
+- commits that only touch the README, `docs/`, `.omp/`, `.github/`, `tests/` or `package.json` don't count. They
+  don't light the pill, and come along with the next real update.
 - a merged pull request shows up as one entry (its merge), not every commit in it
 - it never merges or rebases your work in a clone. With local commits, or edits in the way, update by hand:
   `git pull`, then `tern plugin reload`.
-- clones linked to the deprecated `omp-usage` folder relink to the repo folder when they update (see
-  [From a clone](#from-a-clone))
+- an installed copy updates safely: it writes the new files beside the old ones first and `plugin.toml` last, so a
+  copy cut short still says its old version and finishes the update on its next load. It only copies the plugin's
+  own files, deletes the ones the update removed, and doesn't download the whole repo again after `git gc`.
 - updates need git on your `PATH`, installed copies included
 - an installed copy updates from whatever repo its `upstream` file names, read on every check. A fork puts its own
   URL there, and updates leave that file alone.
@@ -357,19 +454,27 @@ A few things to know:
 | Symptom | Check |
 | --- | --- |
 | `tern plugin list` isn't `ready` | It prints the error. Tern's log is at `%LOCALAPPDATA%\Tern\Logs\tern.log` |
-| No line | The focused pane is omp; its provider has limits; omp was restarted after installing; extension statuses are on (step 2); `omp plugin list` shows `omp-usage` enabled (if not, run **omp Usage: Set up omp extension** from the palette), or `extensions:` in `config.yml` names it |
+| No line | The focused pane is omp; its provider has limits; your omp sessions were restarted after installing or updating; `omp plugin list` shows `omp-usage` enabled (if not, run **omp Usage: Set up omp extension** from the palette), or `extensions:` in `config.yml` names it on a line that isn't commented out |
+| The line faded and says `as of 25m ago`, or went back to omp's own status | omp hasn't fetched new numbers: run `omp usage` to see why (offline, an expired login). Right after an update, restart your omp sessions: sessions started before it stop writing the numbers |
 | `omp Usage couldn't set up its omp extension` | Tern couldn't run `omp plugin`: omp has to be on the `PATH` Tern started with, or be the omp Tern manages. Tern's log has omp's reason and the `omp plugin link …` command to run yourself |
-| All/Selected only show the current model, or panes show different numbers | The cache is stale. Restart your omp sessions |
-| The card's reset dates flip between two values | An omp session from before an update is still writing the cache. Restart your omp sessions |
+| All/Selected only show the current model, or panes show different numbers | No omp session has written the numbers for 30 minutes. Start or restart an omp session |
+| An omp pane over SSH or in WSL shows different numbers, or no line | That's on purpose: the numbers omp Usage reads are this computer's, so those panes show their own omp's status instead. Set the extension up in the omp there (`omp plugin link ./omp` in a clone) and keep omp's extension statuses on (`statusLine.showHookStatus`, on by default) |
+| The line says `usage cache too big to read` | The file the extension writes is over 1 MiB (very many accounts and models). Restart your omp sessions: an up-to-date extension writes it much smaller |
+| The hover card is cut off at the top of a short pane | It opens above the line, and Tern doesn't tell plugins how tall a pane is. Open the quota details (Alt+Shift+U), or pick a smaller **Card height** |
+| omp's usage text shows in other omp panes' bars | omp shows extension statuses in every pane, and omp Usage hides its own there, since the line shows it better. Tern's styles can't tell panes apart, so while any omp pane needs that text as its fallback (over SSH, in WSL, a model with no numbers), it shows in every pane |
+| The session cost stays in omp's bar while other segments drop out | That's omp Usage's `bar.css`: Tern cuts the session cost before any status segment, so with a long status line (the `full` preset) it would never show. Keeping it makes Tern drop the lowest-priority segments instead. The same sheet styles the Update omp Usage pill and centers the gauge in its chip |
 | The line stopped after an omp or Tern update | omp may have renamed something the plugin reads. Ask omp to fix `omp-usage` |
 | No plan on Claude's heading | omp reports Claude's plan since 19.0. Update omp and restart your omp sessions |
 | On a Fable model, the Fable window doesn't lead | An omp session started before you updated omp Usage still runs the old extension. Restart your omp sessions |
-| Clicking the line does nothing | That's expected: Tern doesn't give plugins clicks on omp's composer. Use the shortcuts, or `usage` in the widget bar |
+| No pace in the card | With **Show pace** on **When ahead**, a window under 1.1× has nothing to say: pick **Always** to see every window's pace. Either way there's none in the first tenth of a window, once it's used up, or when omp gives no length or reset time for it. Or **Show pace** is **Off** |
+| No alert toasts | Alerts are off by default (**Alerts** in the panel). They toast only crossings, not what was already low when you turned them on, and only numbers less than 30 minutes old |
+| Clicking the line does nothing | That's expected: Tern doesn't give plugins clicks on omp's composer. Use the shortcuts, or the gauge in the widget bar |
 | Alt+Shift+U or Ctrl+Alt+U does nothing | Another binding took it. Bind `plugin.omp-usage.details` or `plugin.omp-usage.panel` to something else |
-| No update pill, or no `usage` | Add the **Plugin segments** widget to Tern's widget bar (palette › Edit widgets…), or use the panel's Updates section. Checks might also be Off |
+| No update pill, or no gauge | Add the **Plugin segments** widget to Tern's widget bar (palette › Edit widgets…), or use the panel's Updates section. Checks might also be Off. The gauge only shows while an omp pane has focus |
+| The gauge in the widget bar never warns | It only warns while a window in the focused omp pane is at 1.1× its [pace](#pace) or more, and never while **Show pace** is Off |
 | `omp Usage can't check for updates` | It needs git on `PATH`; a clone needs a branch tracking a remote, and an installed copy needs its `upstream` file naming the repo (`https://github.com/jmazzola/tern-plugin-omp-usage.git`). The toast gives the reason |
 | `omp Usage can't tell which version it is` | The repo its `upstream` file names has no commit at the installed version. A fork has to put its own URL in `upstream` |
-| `omp Usage couldn't link its repo's root` | It's a clone linked to the deprecated `omp-usage` folder. Run `tern plugin link .` in the repo folder |
+| A clone stopped loading after an update | It's still linked to the old `omp-usage` folder, which is gone. Run `tern plugin link .` in the repo folder |
 | Edits to the plugin's `.luau` files don't show | `tern plugin reload` |
 
 Don't edit Tern's `settings.json` from PowerShell: it adds a BOM, and Tern falls back to its defaults. For external

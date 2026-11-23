@@ -62,6 +62,11 @@ Sources stay separate. If two sources expose the same account, it shows up twice
 in the panel or drop it from the file. Picking which account to show here doesn't change which account CPA actually
 sends requests to.
 
+Each pool is labeled with its provider and the source's `id` (`Codex@proxy`), and a source's own status with its type
+(`CPA@proxy`, `KEEPER@dashboard`). Two pools in one source whose providers would read alike add the next words of
+their provider id until they don't, the same way omp's own `zai` and `zai-coding-plan` read `Zai` and `Zai-Coding`,
+so their windows never mix.
+
 Protocol references: [CPA v8.0.69](https://github.com/router-for-me/CLIProxyAPI/blob/v8.0.69/docs/management-api-v8.md)
 and [Keeper 7d28848](https://github.com/Willxup/cpa-usage-keeper/tree/7d28848). Management-only `/v0` deployments
 aren't supported.
@@ -125,6 +130,10 @@ missing one means "not refreshed", not 0% left). Turn on Keeper's own scheduled 
 omp Usage queues `/api/v1/quota/refresh` - which makes real requests upstream - and picks up the results on the next
 poll. Freshness always goes by Keeper's `refreshed_at`, never by when omp Usage happened to read the cache.
 
+The views go by that observation time too, as they do for omp's own numbers, taking a pool's oldest current account:
+older than 10 minutes, its windows fade and say how old they are (`as of 14m ago`); older than 30 minutes, they
+aren't shown. With the default `maxAgeSeconds` of 600, a source's quota goes stale (no meters) at 10 minutes anyway.
+
 ## What the views show
 
 | Information | How it shows |
@@ -134,7 +143,7 @@ poll. Freshness always goes by Keeper's `refreshed_at`, never by when omp Usage 
 | Observed usage | The tokens and API-equivalent cost a window has used, for that exact account and window. Keeper can work it out from the requests it recorded and its price catalog |
 | Estimated remaining | `tokens used × share left ÷ share used`, only for windows with usage and a share used above 0%. In the card (tokens and value) and the details |
 | API-equivalent value | Paired with observed cost, in the same currency. It's not cash, a subscription price, or a spending allowance |
-| Stale, missing or rolled-over data | Notes and the observation time. Stale data gets no meters or estimates, and missing numbers are left out, never shown as 0 |
+| Stale, missing or rolled-over data | Notes and the observation time. Stale data gets no meters or estimates, and missing numbers are left out, never shown as 0. Combined, an account without current numbers is left out of the averages, a note names it (`9 of 10 accounts · no current numbers for bob`), and its source's stale or error note still shows under its name |
 | Allowed / limit reached | Shown wherever the source says so, even without a share |
 | Saved resets | Codex credits and Claude grants, where the source gives them, read-only |
 | Provider and plugin summaries | Labeled, with units, in the details. No made-up percentage without a limit to divide by |
@@ -160,4 +169,5 @@ applies a window's scope to the model id, and `modelMappings` only picks the poo
 | An external source returns 401/403 | CPA needs its management key. Keeper needs an administrator login, not an API-key viewer |
 | No tokens or API-equivalent value | Only Keeper gives those, and only for windows with recorded usage and a share used above 0% |
 | Tokens and costs disappear when combined | Combined and by plan don't add them up. Pick All accounts or a single account |
+| Combined says `no current numbers for bob` | That account's quota is stale or its source failed, so its windows are left out of the averages. Pick the account alone, or open the quota details, to see its source's note |
 | Plans read as ids, or amounts as plain text in the details | Restart your omp sessions after updating, then `tern plugin reload omp-usage`. Older cache rows stay readable as text |

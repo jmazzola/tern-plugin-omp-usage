@@ -5,6 +5,7 @@ local render = require("./render")
 local pickers = require("./pickers")
 local update = require("./update")
 local detail_view = require("./details")
+local alerts = require("./alerts")
 
 type Cache = data.Cache
 type Dock = data.Dock
@@ -21,6 +22,8 @@ local KV_CARD_ROWS = data.KV_CARD_ROWS
 local CARD_ROWS = data.CARD_ROWS
 local KV_BACKDROP = data.KV_BACKDROP
 local BACKDROPS = data.BACKDROPS
+local KV_PACE = data.KV_PACE
+local PACES = data.PACES
 local KV_USAGE_OPENS = data.KV_USAGE_OPENS
 local USAGE_OPENS = data.USAGE_OPENS
 local COMBINED = data.COMBINED
@@ -79,6 +82,7 @@ local toggle_plan = pickers.toggle_plan
 local move_account = pickers.move_account
 local after_change = pickers.after_change
 local prompt_color = pickers.prompt_color
+local ALERTS_DETAIL = pickers.ALERTS_DETAIL
 
 -- The dock window.luau last read, which the preview of the line is drawn from, and how the quota details open.
 -- window.luau requires this module, so it hands both over with `init`.
@@ -788,15 +792,31 @@ $P .oup-usub {
 	font: 400 11.5px/15px var(--sans);
 	color: var(--t3);
 }
+/* the one call to action (Download Update): the accent as a tint and a ring, under the theme's strongest text, which
+   stays readable on any accent, light or dark, bright or deep (white on a bright accent doesn't). Over the ready
+   box's 8%, the tint (dark themes 24%, 28% on hover; light themes, whose text is lighter, 16% and 20%) keeps the
+   text at 4.8:1 or more on every accent, white and black included */
 $P .oup-btn.oup-primary {
-	color: #fff;
-	background-color: var(--accent);
-	box-shadow: none;
+	font-weight: 600;
+	color: var(--t1);
+	background-color: light-dark(rgb(from var(--accent) r g b / 16%), rgb(from var(--accent) r g b / 24%));
+	box-shadow:
+		0 0 0 1px rgb(from var(--accent) r g b / 75%),
+		0 8px 18px -12px rgb(from var(--accent) r g b / 90%);
 }
 $P .oup-btn.oup-primary:hover {
-	color: #fff;
-	background-color: rgb(from var(--accent) r g b / 85%);
-	box-shadow: none;
+	color: var(--t1);
+	background-color: light-dark(rgb(from var(--accent) r g b / 20%), rgb(from var(--accent) r g b / 28%));
+	box-shadow:
+		0 0 0 1px var(--accent),
+		0 8px 18px -12px rgb(from var(--accent) r g b / 90%);
+}
+/* an update check that failed, or a clone it can't update */
+$P .oup-ustat[data-warn] {
+	box-shadow: 0 0 0 1px rgb(from var(--warn) r g b / 45%);
+}
+$P .oup-ustat[data-warn] .oup-usub {
+	color: var(--t2);
 }
 $P .oup-urow {
 	display: flex;
@@ -1083,6 +1103,26 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "What sits behind the line" } }, backdrop_pills),
 		ui.el("span", { class = "oup-note", text = backdrop_note .. " Chats scroll under the composer; the background keeps the line readable over them." }),
 	})
+	-- which windows say their pace (see data.luau's PACES)
+	local pace_pills: { Node } = {}
+	local pace_note = ""
+	for _, choice in PACES do
+		local on = choice.id == settings.pace
+		if on then
+			pace_note = choice.label .. ": " .. choice.detail .. "." .. (if choice.id == "off" then "" else " In the card and the quota details, never on the line.")
+		end
+		table.insert(pace_pills, ui.el("button", {
+			class = "oup-pill",
+			text = choice.label,
+			actions = { click = "pace=" .. choice.id },
+			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+		}))
+	end
+	local pace = ui.el("div", { class = "oup-urow oup-limit" }, {
+		ui.el("span", { class = "oup-ulabel", text = "Show pace" }),
+		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "Which windows say their pace" } }, pace_pills),
+		ui.el("span", { class = "oup-note", text = pace_note }),
+	})
 	-- the stage's padding, the card (its rows and padding), the gap and the line: see `.oup-stage`, CARD_CSS
 	local most = build.most_rows(settings, providers, cache, hint)
 	if most > 0 then
@@ -1095,6 +1135,7 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 			}),
 			height,
 			backdrop,
+			pace,
 		})
 	end
 	local line = line_of(preview)
@@ -1136,6 +1177,7 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 		)
 	end
 	table.insert(children, backdrop)
+	table.insert(children, pace)
 	return section("preview", "Preview", "what the composer shows, its card open as on a hover", children)
 end
 
@@ -1218,7 +1260,7 @@ local function left_now(settings: Settings, provider: Provider, windows: { Windo
 				},
 			}, {
 				ui.el("span", { class = "oup-w", text = string.upper(window.bare or window.label) }),
-				ui.el("span", { class = "oup-v", text = tostring(window.pct) .. "%", attrs = { ["data-low"] = if tone ~= "ok" then tone else nil } }),
+				ui.el("span", { class = "oup-v", text = data.pct_text(window), attrs = { ["data-low"] = if tone ~= "ok" and not window.passed then tone else nil } }),
 			})
 		)
 	end
@@ -1546,24 +1588,64 @@ function build.colors(settings: Settings, providers: { Provider }, rules: { stri
 	return section("colors", "Colors", "A label's color and its bars'. Point at a swatch for its name.", rows)
 end
 
--- Updates (update.luau), in Tern's words: what's installed and whether an update is waiting, with Download Update
--- (and What's New, the update card) or Check for Updates, then how often the automatic check runs.
-local function update_status(): (string, string?)
+-- Updates (update.luau), in Tern's words: what's installed and what the last check found, with Download Update
+-- (and What's New, the update card) or Check for Updates, then how often the automatic check runs. "Up to date"
+-- only when the last check succeeded and found nothing waiting; `warn` when it failed or can't update this copy.
+local function update_status(): (string, string?, boolean)
 	local version = update.version()
 	local name = "omp Usage" .. (if version then " " .. version else "")
+	local landing = update.landing()
+	if landing then
+		return "Finishing the update to " .. landing, "omp Usage reloads as soon as its files are in place", false
+	end
 	local pending = update.pending()
 	if pending then
 		local next = if pending.version and pending.version ~= version then pending.version else pending.short
-		return "omp Usage " .. next .. " is available", "You have " .. (version or "an earlier version")
+		return "omp Usage " .. next .. " is available", "You have " .. (version or "an earlier version"), false
 	end
 	local last = update.last_checked()
-	if last == nil then
-		return name, nil
+	local ago = if last then span(math.max(0, os.time() - last) * 1000) .. " ago" else nil
+	local outcome = update.last_outcome()
+	local reason = if outcome then outcome.reason else nil
+	if outcome and reason == "failed" then
+		return "Couldn't check for updates", outcome.detail or "The check failed. Try again in a moment.", true
+	elseif outcome and reason == "diverged" then
+		return "This clone has commits of its own", outcome.detail or "Merge the upstream by hand with git pull", true
+	elseif outcome and reason == "skipped" then
+		return "Skipped " .. (outcome.version or "this version"), "You have " .. name .. (if ago then " · checked " .. ago else ""), false
+	elseif outcome and outcome.ok and (reason == "up_to_date" or reason == "updated" or reason == "available") then
+		return name .. " is up to date", if ago then "Checked " .. ago else nil, false
 	end
-	return name .. " is up to date", "Checked " .. span(math.max(0, os.time() - last) * 1000) .. " ago"
+	-- no outcome yet (or one this copy doesn't know): what's installed, and when it last checked
+	return name, if ago then "Last checked " .. ago else nil, false
 end
 
--- What `usage` in the widget bar opens (see data.luau's USAGE_OPENS).
+-- Alerts (alerts.luau): opt-in toasts as a window runs low, and before a saved reset expires.
+function build.alerts(): Node
+	local on = alerts.enabled()
+	local pills: { Node } = {}
+	for _, choice in { { id = "on", label = "On" }, { id = "off", label = "Off" } } do
+		local picked = (choice.id == "on") == on
+		table.insert(pills, ui.el("button", {
+			class = "oup-pill",
+			text = choice.label,
+			actions = { click = "alerts=" .. choice.id },
+			attrs = { ["data-on"] = if picked then true else nil, ["aria-pressed"] = if picked then "true" else "false" },
+		}))
+	end
+	local note = if on
+		then "On: " .. ALERTS_DETAIL .. ". Each one toasts once until the window resets, in only one Tern window."
+		else "Off: no toasts. The line and card still turn to warning colors at 25% and 10%."
+	return section("alerts", "Alerts", nil, {
+		ui.el("div", { class = "oup-urow" }, {
+			ui.el("span", { class = "oup-ulabel", text = "Toast when a window runs low" }),
+			ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "Toast when a window runs low" } }, pills),
+			ui.el("span", { class = "oup-note", text = note }),
+		}),
+	})
+end
+
+-- What a click on the widget bar's gauge opens (see data.luau's USAGE_OPENS), and what the gauge shows.
 function build.widget_bar(settings: Settings): Node
 	local pills: { Node } = {}
 	local note = ""
@@ -1579,10 +1661,10 @@ function build.widget_bar(settings: Settings): Node
 			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
 		}))
 	end
-	return section("widget-bar", "Widget bar", "usage shows in its Plugin segments widget (palette › Edit widgets…) while an omp pane has focus", {
+	return section("widget-bar", "Widget bar", "its Plugin segments widget (palette › Edit widgets…) shows a gauge, and a warning like Claude 1.4× pace while a window in the focused omp pane runs ahead. It never warns while Show pace is off", {
 		ui.el("div", { class = "oup-urow oup-limit" }, {
-			ui.el("span", { class = "oup-ulabel", text = "usage opens" }),
-			ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "What usage in the widget bar opens" } }, pills),
+			ui.el("span", { class = "oup-ulabel", text = "A click opens" }),
+			ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "What a click on the widget bar segment opens" } }, pills),
 			ui.el("span", { class = "oup-note", text = note }),
 		}),
 	})
@@ -1600,7 +1682,7 @@ function build.updates(): Node
 			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
 		}))
 	end
-	local title, sub = update_status()
+	local title, sub, warn = update_status()
 	local say: { Node } = { ui.el("span", { class = "oup-utitle", text = title }) }
 	if sub then
 		table.insert(say, ui.el("span", { class = "oup-usub", text = sub }))
@@ -1615,7 +1697,7 @@ function build.updates(): Node
 		buttons = { ui.el("button", { class = "oup-btn", text = "Check for Updates", actions = { click = "update-check" } }) }
 	end
 	return section("updates", "Updates", nil, {
-		ui.el("div", { class = "oup-ustat", attrs = { ["data-ready"] = if update.pending() then true else nil } }, {
+		ui.el("div", { class = "oup-ustat", attrs = { ["data-ready"] = if update.pending() then true else nil, ["data-warn"] = if warn then true else nil } }, {
 			ui.el("span", { class = "oup-say" }, say),
 			ui.el("span", { class = "oup-acts" }, buttons),
 		}),
@@ -1672,6 +1754,8 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		tostring(settings.card_rows),
 		settings.backdrop,
 		settings.usage_opens,
+		settings.pace,
+		tostring(alerts.enabled()),
 		update.interval().id,
 		(function(): string
 			local title, sub = update_status()
@@ -1681,12 +1765,12 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 	for _, provider in providers do
 		local windows: { string } = {}
 		for _, window in provider.windows do
-			table.insert(windows, window.label .. ":" .. tostring(window.pct))
+			table.insert(windows, window.label .. ":" .. data.pct_text(window))
 		end
 		local accounts = table.concat(accounts_in_order(provider.accounts, settings.account_order[provider.id]), ",")
 		local off = table.concat(settings.account_hidden[provider.id] or {}, ",")
 		local plans: { string } = {}
-		for _, detail in provider.details or {} do
+		for _, detail in (provider.details or {}) :: { data.Detail } do
 			if detail.kind == "plan" then
 				table.insert(plans, (detail.account or "") .. "=" .. (detail.value or ""))
 			end
@@ -1727,6 +1811,7 @@ local function panel_parts(state: PanelState): (Node, Node, string)
 		build.providers(state.settings, state.providers),
 		build.colors(state.settings, state.providers, rules),
 		build.widget_bar(state.settings),
+		build.alerts(),
 		build.updates(),
 	})
 	return view, panel_dock(state.keys), table.concat(rules, "\n")
@@ -1801,7 +1886,8 @@ end
 local function watch_update(cx: WindowCx?)
 	tern.timer(1000, watch_update)
 	local pane = panel_pane
-	if cx == nil then
+	-- no panel to pause or bring back: nothing to ask
+	if cx == nil or (pane == nil and not panel_paused) then
 		return
 	end
 	local name = update.applying()
@@ -1944,6 +2030,20 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 			return false
 		end
 		store.set(KV_USAGE_OPENS, value)
+	elseif act == "pace" then
+		local known = false
+		for _, choice in PACES do
+			known = known or choice.id == value
+		end
+		if not known then
+			return false
+		end
+		store.set(KV_PACE, value)
+	elseif act == "alerts" then
+		if value ~= "on" and value ~= "off" then
+			return false
+		end
+		alerts.set_enabled(value == "on")
 	elseif act == "backdrop" then
 		local known = false
 		for _, choice in BACKDROPS do
