@@ -461,7 +461,7 @@ local function view(rows: { Row }): (Node, string)
 						ui.el("span", { class = "oud-share-u", text = unit or "" }),
 					}),
 				}),
-				ui.el("div", { class = "oud-track", attrs = { role = "meter", ["aria-label"] = row.text .. " remaining", ["aria-valuenow"] = tostring((row.share or 0) * 100), ["aria-valuemin"] = "0", ["aria-valuemax"] = "100" } }, {
+				ui.el("div", { class = "oud-track", attrs = { role = "meter", ["aria-label"] = row.text .. (if unit == "used" then " used" else " remaining"), ["aria-valuenow"] = tostring((row.share or 0) * 100), ["aria-valuemin"] = "0", ["aria-valuemax"] = "100" } }, {
 					ui.el("div", { class = "oud-fill" }),
 				}),
 			}

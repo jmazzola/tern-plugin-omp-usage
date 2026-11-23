@@ -154,7 +154,7 @@ local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: 
 	local hint = settings_hint(shortcut(cx))
 	local running = if pulse and tern.now() < pulse.until_ms then pulse.seq else 0
 	local hidden = table.concat(dock.hide, "\n")
-	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, hint, tostring(running), hidden, line_pane() }, "\n")
+	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, data.display_key(settings), hint, tostring(running), hidden, line_pane() }, "\n")
 	if key ~= sheet_key then
 		sheet_key = key
 		install(hide_css(dock.hide) .. sheet(model, settings, pulse, hint))
@@ -333,6 +333,10 @@ local function open_menu(cx: WindowCx)
 				open_accounts(cx2)
 			elseif choice.pick == "plans" then
 				pickers.open_plans(cx2)
+			elseif choice.pick == "display" then
+				pickers.open_display(cx2, choice.kind)
+			elseif choice.pick == "parts" then
+				pickers.open_parts(cx2)
 			elseif choice.pick == "card-rows" then
 				local items: { PickItem } = {}
 				for _, rows in CARD_ROWS do

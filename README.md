@@ -26,8 +26,8 @@ What it does:
 - reads at a glance: a bar per window in its provider's colors, amber at 25% left, red at 10%. When a share changes,
   a comet runs the bar to its new level. Saved resets show as `+N` (`+NF` for Claude's Fable resets).
 - puts what limits you first: on a Fable or Mythos model, the Fable weekly window leads the line
-- stays readable: the line sits on a frosted glass strip (or a solid one, or none), so the chat scrolling under the
-  composer doesn't show through it
+- stays readable: the line sits on a strip of Liquid Glass (or a solid one, or none), so the chat scrolling under the
+  composer only shows through it softened
 - a hover card that fits: you set how many rows it can take, and past that, accounts sum up instead of running off
   the screen
 - each account's plan (`Ultra`, `Pro 200`) on its heading, wherever the provider says which plan it is; switch any of
@@ -36,6 +36,9 @@ What it does:
 - CLIProxyAPI and CPA Usage Keeper, if you use them: their accounts next to omp's own, and from Keeper, the tokens
   and API-equivalent cost each window has used and roughly what's left
 - the same numbers in every pane, even though every omp session checks usage on its own clock
+- looks how you want: four styles (Instrument, Blocks `▰▰▰▱`, Ring `◔`, Compact text), above the context bar,
+  under it, or stacked a row per window at the composer's right or left; pick which parts show, and whether shares
+  say what's left or what's used
 - a settings panel (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors, and the line's
   background
 - installs from Tern and sets up its own omp extension
@@ -132,7 +135,8 @@ A window at 25% left or less turns amber, and at 10% or less, red. When a share 
 again while a comet runs the bar to its new level: in the provider's color when quota went down, green when it came
 back. With Reduce Motion on (Tern's or the system's), nothing moves.
 
-Tern's chats scroll under the composer, so the line sits on a frosted glass strip that blurs whatever is behind it.
+Tern's chats scroll under the composer, so the line sits on a strip of Liquid Glass: a faint tint with a lit rim and a
+sheen, the chat behind it softened and still there.
 **Line background** in the panel makes it Solid, or Clear (no background at all). Here's the same moment Clear, then
 Glass:
 
@@ -201,6 +205,7 @@ Changes apply right away, in every window.
 | Section | What it does |
 | --- | --- |
 | Preview | The line and its card, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default. An estimate under a bar takes a row; everything else Keeper reports goes in the quota details. Then **Line background**: Glass (default), Solid, or Clear |
+| Display | **Style**: Instrument (default), Blocks, Ring or Compact. **Position**: Above the bar (default; in Spine, under it), Under the bar, or Stacked (a block over the chat, a row per window, up to 4; past that the last row sums up the rest), at the composer's **Right** or **Left**. **On the line**: provider, window, bar, share, countdown, saved resets, plan (a gold pill, off by default) and other statuses; a window keeps its bar or its share. **Shares**: Left (default) or Used, on the line, the card and the quota details |
 | Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers**. When there's no quota data for them, the line falls back to the focused session's own status |
 | Providers | Pick a row up by its grip, then click where it goes. Click a window to hide or show it everywhere. The switch adds the provider to Selected. A provider or account whose plan is known shows it as a gold pill beside its switch: click the pill to leave that plan out of the card and the quota details (it fades and is struck through), again to show it. With several accounts, each one gets its own row: grip, name (click it to show only that account, again for all), windows, plan, and a switch that takes it off the line, the card and the quota details. A chip next to the provider says what's showing, with a button for the next option: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 2 Max, 4 Pro, 4 Ultra ✕` (or `by plan · 6 with 5H, 4 without ✕`) with **all in one**, or `only dev.ops ✕`. Grouped by windows, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`). A custom color that's nearly white gets a darker shade in the light theme, and one that's nearly black a lighter one in the dark theme, so it never vanishes into the card |

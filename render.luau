@@ -18,6 +18,10 @@ local tone_of = data.tone_of
 local is_fable = data.is_fable
 local window_name = data.window_name
 local palette_for = data.palette_for
+local plan_in = data.plan_in
+local line_parts = data.line_parts
+local share_of = data.share_of
+local share_word = data.share_word
 
 local SHEET = "usage"
 -- A saved reset expiring this soon reads `--warn` in the card (the extension flags it with `!` in the line).
@@ -34,6 +38,19 @@ local BAR_GLYPHS = 8
 local COMPACT_BAR_GLYPHS = 6 -- with several providers on the line
 local BAR_Y = 7.25 -- px: the bar glyphs' center in the line's 13px box
 local TIP_W, TIP_H = 10, 6
+-- Blocks' filled and empty blocks, and Ring's dials, a quarter apart (all 0.6em wide in the line's font, too).
+local BLOCK_ON, BLOCK_OFF = "▰", "▱"
+local DIALS = { "○", "◔", "◑", "◕", "●" }
+-- A stacked line (Display's Stacked): at most this many rows, 15px apart (its font's line height).
+local STACK_ROWS = 4
+local LINE_ROW = 15
+-- Above the hairline, the line's box ends this far over the meter: Tern (0.9.32) draws the context labels (`29%`,
+-- `1M`) from 1px above the meter's top, and the backdrop's 1px rim and drop shadow reach below the box. 2px of room
+-- left the rim on the labels' glyphs; LIFT_PX clears them, and the room above the composer grows by the same amount.
+local LIFT_PX = 5
+local ROOM_PX = 15 + LIFT_PX - 2
+-- The plan pill's gold, in the card and on the line.
+local PLAN_A, PLAN_B = "light-dark(#b7791f, #f6c453)", "light-dark(#975a16, #d69e2e)"
 -- The comet: its head and trail, and where in the run (0–1) it sets off, arrives and has flared.
 local HEAD_W, HEAD_H = 18, 7
 local TRAIL_W, TRAIL_H = 34, 2
@@ -131,10 +148,183 @@ local function window_colors(tone: string, group: number): (string, string)
 end
 
 type Paint = { from: number, to: number, color: string }
--- A window's bar: its first glyph, its length and how many glyphs it fills (a fraction), the glyph its window
--- ends at, the window's key (provider and label) and its colors.
-type Bar = { at: number, glyphs: number, fill: number, ends: number, key: string, a: string, b: string }
-type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
+-- A window's bar: its first glyph, its length and how many glyphs it fills (a fraction; whole blocks in Blocks),
+-- the glyph its window ends at, the window's key (provider and label), its colors and its row (0 but on a stacked
+-- line). `boxed`: drawn as boxes in the tips' layer under blank glyphs (a stacked line's Instrument bars: its rows
+-- take a color each, so its text can't fill a bar).
+type Bar = { at: number, glyphs: number, fill: number, ends: number, key: string, a: string, b: string, row: number, boxed: boolean }
+-- A plan's pill around its glyphs (a no-break space of padding either side), as a bar is placed.
+type Pill = { at: number, glyphs: number, ends: number, row: number }
+-- `rows`: a stacked line's rows (`text` has them a line each), each in one color.
+type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar }, pills: { Pill }, rows: { { text: string, color: string } }? }
+
+-- A window's bar in `style`, `n` glyphs long for a share of `share`%: its text and how many glyphs it fills.
+-- Blocks fill whole blocks, at least one while anything is there.
+local function bar_text(style: string, n: number, share: number): (string, number)
+	local fill = math.clamp(share, 0, 100) / 100 * n
+	if style == "blocks" then
+		local on = math.round(fill)
+		if share > 0 then
+			on = math.max(on, 1)
+		end
+		return string.rep(BLOCK_ON, on) .. string.rep(BLOCK_OFF, n - on), on
+	end
+	return string.rep(BAR, n), fill
+end
+
+-- Ring's dial for a share: empty, a quarter, half, three quarters or full, whichever is nearest.
+local function dial(share: number): string
+	return DIALS[math.round(math.clamp(share, 0, 100) / 25) + 1]
+end
+
+-- A saved reset's count as the line has it: `+2`, `+2F` for Claude's Fable resets.
+local function saved_text(group_id: string?, window: Window): string
+	return "+" .. tostring(window.saved) .. (if is_fable(group_id, window.label) then "F" else "")
+end
+
+type StackRow = { head: string, plan: string?, label: string, share: number, tone: string, reset: string, saved: string, key: string, a: string, b: string, pct: number }
+
+-- A stacked line: a row per window, its columns lined up (what's before the window, its plan, Ring's dial, label,
+-- bar, share, countdown and saved resets), then the other statuses a row each. Past STACK_ROWS rows the last one
+-- sums up the rest: `+3 more · lowest 7D 5%`. A row takes one color (its window's tone), so the provider's colors
+-- go to its bar: Instrument's are boxes laid under blank glyphs (see `statics`), Blocks' keep their glyphs.
+local function stack_of(model: Model, settings: Settings): Line
+	local on = line_parts(settings)
+	local style = settings.style
+	local entries: { StackRow } = {}
+	for g, group in model.groups do
+		for w, window in group.windows do
+			local account = if window.lead then window.account else nil
+			local head: { string } = {}
+			if w == 1 and on.provider and group.label ~= "" then
+				table.insert(head, group.label)
+			end
+			if account then
+				table.insert(head, account :: string)
+			end
+			local a, b = window_colors(tone_of(window.pct), g)
+			table.insert(entries, {
+				head = table.concat(head, " "),
+				plan = if on.plan and (w == 1 or account) then plan_in(group.details, account) else nil,
+				label = if on.window then string.upper(window.bare or window.label) else "",
+				share = share_of(model, window.pct),
+				tone = tone_of(window.pct),
+				reset = if on.reset and window.reset then window.reset :: string else "",
+				saved = if on.saved and window.saved then saved_text(group.id, window) .. (if window.expires then "!" else "") else "",
+				key = group.key .. "/" .. window.label,
+				a = a,
+				b = b,
+				pct = window.pct,
+			})
+		end
+	end
+	local others = if on.others then model.others else {}
+	local more: string? = nil
+	local more_tone = "ok"
+	if #entries + #others > STACK_ROWS then
+		local keep = STACK_ROWS - 1
+		local lowest: StackRow? = nil
+		for i = keep + 1, #entries do
+			if lowest == nil or entries[i].pct < (lowest :: StackRow).pct then
+				lowest = entries[i]
+			end
+		end
+		more = string.format("+%d more", #entries + #others - keep)
+		if lowest then
+			local low = lowest :: StackRow
+			local name = if low.label ~= "" then low.label .. " " else ""
+			more = (more :: string) .. string.format(" · %s %s%d%%", if model.used then "most used" else "lowest", name, low.share)
+			more_tone = low.tone
+		end
+		others = table.move(others, 1, math.max(0, keep - #entries), 1, {})
+		entries = table.move(entries, 1, math.min(keep, #entries), 1, {})
+	end
+	-- the columns' widths
+	local head_w, label_w, share_w, reset_w = 0, 0, 0, 0
+	local saved_any = false
+	for _, entry in entries do
+		local head = glyph_count(entry.head)
+		if entry.plan then
+			head += (if head > 0 then 1 else 0) + glyph_count(entry.plan :: string) + 2
+		end
+		head_w = math.max(head_w, head)
+		label_w = math.max(label_w, glyph_count(entry.label))
+		share_w = math.max(share_w, #tostring(entry.share) + 1)
+		reset_w = math.max(reset_w, glyph_count(entry.reset))
+		saved_any = saved_any or entry.saved ~= ""
+	end
+	local rows: { { text: string, color: string } } = {}
+	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {}, pills = {}, rows = rows }
+	local word = if style == "compact" then "" else " " .. share_word(model)
+	for r, entry in entries do
+		local row = ""
+		local function cell(s: string, width: number, gap: number)
+			if row ~= "" then
+				row ..= string.rep(" ", gap)
+			end
+			row ..= s .. string.rep(" ", width - glyph_count(s))
+		end
+		if head_w > 0 then
+			local head = entry.head
+			if entry.plan then
+				local at = glyph_count(head) + (if head ~= "" then 1 else 0)
+				head ..= (if head ~= "" then " " else "") .. " " .. (entry.plan :: string) .. " "
+				table.insert(line.pills, { at = at, glyphs = glyph_count(head) - at, ends = 0, row = r - 1 })
+			end
+			cell(head, head_w, 0)
+		end
+		if style == "ring" and on.bar then
+			cell(dial(entry.share), 1, 2)
+		end
+		if label_w > 0 then
+			cell(entry.label, label_w, if style == "ring" and on.bar then 1 else 2)
+		end
+		if on.bar and (style == "instrument" or style == "blocks") then
+			if row ~= "" then
+				row ..= " "
+			end
+			local text, filled = bar_text(style, BAR_GLYPHS, entry.share)
+			local boxed = style == "instrument"
+			table.insert(line.bars, {
+				at = glyph_count(row),
+				glyphs = BAR_GLYPHS,
+				fill = filled,
+				ends = 0,
+				key = entry.key,
+				a = entry.a,
+				b = entry.b,
+				row = r - 1,
+				boxed = boxed,
+			})
+			row ..= if boxed then string.rep(" ", BAR_GLYPHS) else text
+		end
+		if on.share then
+			local share = tostring(entry.share) .. "%"
+			cell(string.rep(" ", share_w - #share) .. share .. word, share_w + #word, 1)
+		end
+		if reset_w > 0 then
+			cell(entry.reset, reset_w, 2)
+		end
+		if saved_any then
+			cell(entry.saved, 0, 2)
+		end
+		table.insert(rows, { text = row, color = "var(--ou-num-" .. entry.tone .. ")" })
+	end
+	for _, other in others do
+		table.insert(rows, { text = other, color = "var(--ou-soft)" })
+	end
+	if more then
+		table.insert(rows, { text = more :: string, color = if more_tone == "ok" then "var(--ou-soft)" else "var(--ou-num-" .. more_tone .. ")" })
+	end
+	local texts: { string } = {}
+	for _, row in rows do
+		row.text = (string.gsub(row.text, "%s+$", ""))
+		line.glyphs = math.max(line.glyphs, glyph_count(row.text))
+		table.insert(texts, row.text)
+	end
+	line.text = table.concat(texts, "\n")
+	return line
+end
 
 -- One provider: `Claude  5H ━━━━━━━━ 98% left  3h 57m · 7D ━━━━━━━━ 71% left  11h 37m  +1 · <other statuses>`.
 -- Several (the composer is at most ~115 glyphs wide) go compact, the countdowns and the word `left` left to the
@@ -142,11 +332,18 @@ type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
 -- A provider with several accounts names each once, in its color, before its first window, which a `·` sets
 -- apart from the account before: `Claude alice  7D ━━━━━━━━ 68% left … · bob  5H ━━━━━━━━ 40% left …`.
 -- Each window's parts are joined by no-break spaces (a provider's label with its first window) so it wraps
--- whole; with them, what colors each part. `compact` overrides the format the number of providers picks.
-local function line_of(model: Model, compact: boolean?): Line
+-- whole; with them, what colors each part. Display's settings pick the parts (a plan rides after its provider or
+-- account as a gold pill), the style (Blocks: `▰▰▰▱`, Ring: a dial before the window, Compact: no bar and no
+-- `left`) and whether a share is what's left or what's used; Stacked gets a line of its own (`stack_of`).
+local function line_of(model: Model, settings: Settings): Line
+	if settings.place == "stack" then
+		return stack_of(model, settings)
+	end
+	local on = line_parts(settings)
+	local style = settings.style
 	local parts: { string } = {}
-	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {} }
-	local several = if compact ~= nil then compact else #model.groups > 1
+	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {}, pills = {} }
+	local several = #model.groups > 1
 	local bar_glyphs = if several then COMPACT_BAR_GLYPHS else BAR_GLYPHS
 	local function add(s: string, color: string?)
 		local n = glyph_count(s)
@@ -169,63 +366,103 @@ local function line_of(model: Model, compact: boolean?): Line
 		end
 		for w, window in group.windows do
 			local tone = tone_of(window.pct)
+			local share = share_of(model, window.pct)
+			local accent = group_color(g, "a")
+			local a, b = window_colors(tone, g)
 			local account = if window.lead then window.account else nil
 			if w > 1 and several and account == nil then
 				add(" " .. NBSP)
 			else
 				next_part()
 			end
-			if w == 1 and group.label ~= "" then
-				add(group.label, group_color(g, "a"))
-				add(if account then NBSP else NBSP .. NBSP)
+			-- each part after the window's first `gap` no-break spaces after the one before: one between the
+			-- window's own parts, two after what names it; returns the glyph the part starts at
+			local started, own = false, false
+			local function put(s: string, color: string?, gap: number?): number
+				if started then
+					add(string.rep(NBSP, gap or (if own then 1 else 2)))
+				end
+				local at = line.glyphs
+				add(s, color)
+				started = true
+				return at
+			end
+			local named = w == 1 and group.label ~= "" and on.provider
+			if named then
+				put(group.label, accent)
 			end
 			if account then
-				add(unbroken(account :: string), group_color(g, "a"))
-				add(NBSP .. NBSP)
+				put(unbroken(account :: string), accent, 1)
 			end
-			add(unbroken(string.upper(window.bare or window.label)), "var(--ou-lbl)")
-			add(NBSP)
-			local at = line.glyphs
-			add(string.rep(BAR, bar_glyphs))
-			add(NBSP)
-			add(tostring(window.pct) .. "%", "var(--ou-num-" .. tone .. ")")
-			if not several then
-				add(NBSP .. "left", "var(--ou-dim)")
-				if window.reset then
-					add(NBSP .. NBSP .. unbroken(window.reset :: string), "var(--ou-soft)")
+			local plan = if on.plan and (named or account) then plan_in(group.details, account) else nil
+			if plan then
+				local at = put(NBSP .. unbroken(plan :: string) .. NBSP, PLAN_A, 1)
+				table.insert(line.pills, { at = at, glyphs = line.glyphs - at, ends = 0, row = 0 })
+			end
+			local bar: Bar? = nil
+			if on.bar and style == "ring" then
+				put(dial(share), b)
+				own = true
+			end
+			if on.window then
+				put(unbroken(string.upper(window.bare or window.label)), "var(--ou-lbl)")
+				own = true
+			end
+			if on.bar and (style == "instrument" or style == "blocks") then
+				local text, filled = bar_text(style, bar_glyphs, share)
+				local at = put(text)
+				own = true
+				bar = { at = at, glyphs = bar_glyphs, fill = filled, ends = 0, key = group.key .. "/" .. window.label, a = a, b = b, row = 0, boxed = false }
+			end
+			if on.share then
+				put(tostring(share) .. "%", "var(--ou-num-" .. tone .. ")")
+				own = true
+				if not several and style ~= "compact" then
+					add(NBSP .. share_word(model), "var(--ou-dim)")
 				end
 			end
-			if window.saved then
-				local fable = is_fable(group.id, window.label)
-				local saved = "+" .. tostring(window.saved) .. (if fable then "F" else "")
+			if on.reset and not several and window.reset then
+				put(unbroken(window.reset :: string), "var(--ou-soft)", 2)
+			end
+			if on.saved and window.saved then
+				local saved = saved_text(group.id, window)
 				if window.expires then
 					saved ..= if several then "!" else NBSP .. "exp" .. NBSP .. unbroken(window.expires :: string)
 				end
-				add((if several then NBSP else NBSP .. NBSP) .. saved, if window.expires then "var(--ou-num-warn)" else group_color(g, "a"))
+				put(saved, if window.expires then "var(--ou-num-warn)" else accent, if several then 1 else 2)
 			end
-			local a, b = window_colors(tone, g)
-			table.insert(line.bars, {
-				at = at,
-				glyphs = bar_glyphs,
-				fill = math.clamp(window.pct, 0, 100) / 100 * bar_glyphs,
-				ends = line.glyphs,
-				key = group.key .. "/" .. window.label,
-				a = a,
-				b = b,
-			})
+			for _, pill in line.pills do
+				if pill.ends == 0 then
+					pill.ends = line.glyphs
+				end
+			end
+			if bar then
+				bar.ends = line.glyphs
+				table.insert(line.bars, bar)
+			end
 		end
 	end
-	for _, other in model.others do
-		next_part()
-		add(unbroken(other), "var(--ou-soft)")
+	if on.others then
+		for _, other in model.others do
+			next_part()
+			add(unbroken(other), "var(--ou-soft)")
+		end
 	end
 	line.text = table.concat(parts)
 	return line
 end
 
 -- The text's paint: each part's color over its glyphs; each bar from its first color, faint, to its second up to
--- its share, then the track. Hard stops sit between glyphs, so nothing bleeds.
+-- its share, then the track. Hard stops sit between glyphs, so nothing bleeds. A stacked line's rows take a color
+-- each, top to bottom.
 local function line_paint(line: Line): string
+	if line.rows then
+		local stops: { string } = {}
+		for r, row in line.rows :: { { text: string, color: string } } do
+			table.insert(stops, string.format("%s %spx %spx", solid(row.color), num((r - 1) * LINE_ROW), num(r * LINE_ROW)))
+		end
+		return "linear-gradient(180deg, " .. table.concat(stops, ", ") .. ")"
+	end
 	local items: { { at: number, stops: string } } = {}
 	for _, paint in line.paints do
 		table.insert(items, {
@@ -255,10 +492,14 @@ local function line_paint(line: Line): string
 	return "linear-gradient(90deg, " .. table.concat(stops, ", ") .. ")"
 end
 
--- `size` while the bar's window fits on the line of the box drawing it, else 0, so a window that wrapped away
--- takes its tip along (in background sizes, 100% is that box's width).
-local function fits(bar: Bar, size: number): string
-	return string.format("clamp(0px, calc((100%% - %spx) * 1000), %spx)", num(bar.ends * GLYPH - 3), num(size))
+-- `size` while what ends at glyph `ends` fits on the line of the box drawing it, else 0, so a window that wrapped
+-- away takes its tip and pill along (in background sizes, 100% is that box's width). A stacked line doesn't wrap
+-- (`ends` 0).
+local function fits(ends: number, size: number): string
+	if ends == 0 then
+		return num(size) .. "px"
+	end
+	return string.format("clamp(0px, calc((100%% - %spx) * 1000), %spx)", num(ends * GLYPH - 3), num(size))
 end
 
 local function tip_image(color: string, strength: number): string
@@ -277,14 +518,53 @@ end
 
 type Layers = { images: { string }, positions: { string }, sizes: { string } }
 
--- Each bar's lit tip, where its window stands.
-local function tips(line: Line, strength: number): Layers
+local function layer(layers: Layers, image: string, x: number, y: number, w: string, h: number)
+	table.insert(layers.images, image)
+	table.insert(layers.positions, string.format("%spx %spx", num(x), num(y)))
+	table.insert(layers.sizes, string.format("%s %spx", w, num(h)))
+end
+
+-- What the tips' layer draws that doesn't move: each plan's pill (a gold ring, faintly filled, around its text)
+-- and a stacked line's boxed bars (the share in the bar's colors over the track). The comets keep them.
+local function statics(line: Line): Layers
 	local layers: Layers = { images = {}, positions = {}, sizes = {} }
+	for _, pill in line.pills do
+		local x, y = pill.at * GLYPH, pill.row * LINE_ROW + 0.5
+		local w, h, r = pill.glyphs * GLYPH, 12, 6
+		local edge = string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 80), faded(PLAN_B, 80))
+		layer(layers, edge, x + r, y, fits(pill.ends, w - 2 * r), 1)
+		layer(layers, edge, x + r, y + h - 1, fits(pill.ends, w - 2 * r), 1)
+		for _, cap in { { color = PLAN_A, side = "100%", x = x }, { color = PLAN_B, side = "0%", x = x + w - r } } do
+			layer(
+				layers,
+				string.format(
+					"radial-gradient(%spx %spx at %s 50%%, %s 0%%, %s 80%%, %s 88%%, %s 96%%, %s 100%%)",
+					num(r), num(r), cap.side,
+					faded(cap.color, 22), faded(cap.color, 22), faded(cap.color, 80), faded(cap.color, 80), faded(cap.color, 0)
+				),
+				cap.x, y, fits(pill.ends, r), h
+			)
+		end
+		layer(layers, string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 22), faded(PLAN_B, 22)), x + r, y, fits(pill.ends, w - 2 * r), h)
+	end
+	for _, bar in line.bars do
+		if bar.boxed then
+			local x, y = bar.at * GLYPH, bar.row * LINE_ROW + BAR_Y - 1
+			if bar.fill > 0 then
+				layer(layers, string.format("linear-gradient(90deg, %s, %s)", faded(bar.a, 40), solid(bar.b)), x, y, num(bar.fill * GLYPH) .. "px", 2)
+			end
+			layer(layers, string.format("linear-gradient(%s, %s)", solid("var(--ou-track)"), solid("var(--ou-track)")), x, y, num(bar.glyphs * GLYPH) .. "px", 2)
+		end
+	end
+	return layers
+end
+
+-- The tips' layer at rest: what doesn't move, and each bar's lit tip where its window stands.
+local function tips(line: Line, strength: number): Layers
+	local layers = statics(line)
 	for _, bar in line.bars do
 		local x = (bar.at + bar.fill) * GLYPH
-		table.insert(layers.images, tip_image(bar.b, strength))
-		table.insert(layers.positions, string.format("%spx %spx", num(x - TIP_W / 2), num(BAR_Y - TIP_H / 2)))
-		table.insert(layers.sizes, string.format("%s %spx", fits(bar, TIP_W), num(TIP_H)))
+		layer(layers, tip_image(bar.b, strength), x - TIP_W / 2, bar.row * LINE_ROW + BAR_Y - TIP_H / 2, fits(bar.ends, TIP_W), TIP_H)
 	end
 	return layers
 end
@@ -358,26 +638,27 @@ local LINE_CSS = [==[
 /* room above the hairline for the usage line, clear of the working row (in spine, under it: see below); every agent
    pane, so focus never shifts it */
 .sf-dock .sf-col[data-role^='omp.editor'] {
-	margin-top: 15px;
+	margin-top: $ROOM_TOP;
 }
 /* Tern's agents and jobs tray lifts the meter (and the line on it) above itself, right under the working row: the
    same room again, above the tray */
 .sf-dock.sf-tray-ctx > .sf-col.sf-tray {
-	margin-top: 15px;
+	margin-top: $ROOM_TOP;
 }
 .sf-dock.sf-tray-ctx > .sf-col.sf-tray.under {
-	margin-top: 19px;
+	margin-top: $ROOM_UNDER;
 }
 /* the providers' colors */
 $PALETTE
-/* the line: 10px mono in a 13px box whose second line (where a window that doesn't fit wraps) is cut off; one
-   static gradient clipped to the text colors its parts and fills its bars */
+/* the line: 10px mono in a box as tall as its rows, one but for Stacked (one row's box is 13px, its second line,
+   where a window that doesn't fit wraps, cut off); one static gradient clipped to the text colors its parts and
+   fills its bars */
 $METER::before,
 $HOST::before {
 	content: $CONTENT;
-	height: 13px;
+	height: $HEIGHT;
 	overflow: hidden;
-	white-space: pre-wrap;
+	white-space: $WRAP;
 	text-overflow: ellipsis;
 	font: 500 10px/15px var(--mono);
 	font-variant-numeric: tabular-nums;
@@ -398,35 +679,9 @@ $HOST::before {
 /* the text is the focused agent's, so it shows on the focused pane only */
 $METER::before {
 	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: 100%;
-	margin-bottom: 2px;
 }
 $TIPS_CSS
-/* Spine lays the meter across the whole dock, from its left edge, with the working row right above it, and insets
-   the composer's column by its `--sp-side`: there the line goes under the hairline instead, on the column, in the
-   room the margin above leaves between the hairline and the input. Its tips and comets (`::after`) go with it.
-   `--sp-side` takes half the width of the box it's used in, and the meter is 16px narrower than the column's box
-   (`right: 16px`), so here it is Tern's formula over that box's width. */
-$METER_SPINE::before,
-$METER_SPINE::after {
-	left: $SPINE_SIDE;
-	right: calc($SPINE_SIDE - 16px);
-	top: calc(100% + 4px);
-	bottom: auto;
-	margin-bottom: 0;
-}
-/* except over the tray, where Tern lifts the meter onto the tray's sides in every chat style: the line rides above
-   it, as in the other styles */
-$METER_TRAY::before,
-$METER_TRAY::after {
-	left: 0;
-	right: 0;
-	top: auto;
-	bottom: 100%;
-	margin-bottom: 2px;
-}
+$GEOMETRY
 /* with attachments the target is the first chip's end slot: the row doesn't clip it, and the chip isn't its
    containing block, so it is placed from the composer, as the empty row is */
 $CHIPS {
@@ -435,16 +690,12 @@ $CHIPS {
 $CHIPS > .sf-card:first-child {
 	position: static;
 }
-/* the hover target over the line: the meter's place in each chat style, widened by the capsule's 6px pad, as
-   long as the line (or the meter, if that's shorter). At rest it sits under the line, as its backdrop (see
-   below); hovered, over it */
+/* the hover target over the line (placed above), widened by the capsule's 6px pad. At rest it sits under the
+   line, as its backdrop (see below); hovered, over it */
 $HOST {
 	display: block !important;
 	position: absolute;
-	left: 12px;
-	top: -28px;
-	width: min($WIDTH, calc(100% - 24px));
-	height: 15px;
+	height: $HOST_HEIGHT;
 	min-height: 0;
 	margin: 0;
 	padding: 0;
@@ -458,26 +709,6 @@ $HOST {
 	transition:
 		background-color 0.2s var(--ease),
 		box-shadow 0.2s var(--ease);
-}
-$HOST_READER {
-	left: 16px;
-	width: min($WIDTH, calc(100% - 32px));
-}
-$HOST_SPINE {
-	left: calc(var(--sp-side) - 6px);
-	top: 5px;
-	width: min($WIDTH, calc(100% - 2 * var(--sp-side) + 12px));
-}
-$HOST_CONSOLE {
-	left: calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px);
-	width: min($WIDTH, calc(min(100%, 1040px) - var(--cn-gut) + 12px));
-}
-/* over the tray, the target follows the meter Tern lifts above it: else it would sit on the tray's cards, taking
-   their hover and clicks */
-$HOST_TRAY {
-	left: calc(var(--sf-tray-ctx-l, 22px) - 6px);
-	top: calc(-28px - var(--sf-tray-lift, 0px));
-	width: min($WIDTH, calc(100% - var(--sf-tray-ctx-l, 22px) - var(--sf-tray-ctx-r, 22px) + 12px));
 }
 $BACKDROP
 /* hovered, the line lifts into a glass capsule, ringed in its provider's color (or the lowest window's tone) */
@@ -513,31 +744,220 @@ $HOST:hover::before {
 }
 ]==]
 
--- The tips at rest, on the meter's `::after`, which a change's comets take over (pulse_css).
+-- Where the line sits, above the hairline or under it (Display's Position): the line and its tips' layer on the
+-- meter, and the hover target over the line, the meter's place in each chat style, as long as the line (or the
+-- meter, if that's shorter). Under it, outside Spine (which has the room) and the tray (where it rides above),
+-- every composer's input moves down a line to make room, so focus never shifts one.
+local ROW_CSS = [==[
+$ROOM
+$METER::before,
+$METER::after {
+	left: 0;
+	right: 0;
+	$LINE_Y
+}
+/* Spine lays the meter across the whole dock, from its left edge, with the working row right above it, and insets
+   the composer's column by its `--sp-side`: there the line goes under the hairline, on the column, in the room the
+   margin above leaves between the hairline and the input. Its tips and comets (`::after`) go with it.
+   `--sp-side` takes half the width of the box it's used in, and the meter is 16px narrower than the column's box
+   (`right: 16px`), so here it is Tern's formula over that box's width. */
+$METER_SPINE::before,
+$METER_SPINE::after {
+	left: $SPINE_SIDE;
+	right: calc($SPINE_SIDE - 16px);
+	top: calc(100% + 4px);
+	bottom: auto;
+	margin-bottom: 0;
+}
+/* except over the tray, where Tern lifts the meter onto the tray's sides in every chat style: the line rides above
+   it, as in the other styles */
+$METER_TRAY::before,
+$METER_TRAY::after {
+	left: 0;
+	right: 0;
+	top: auto;
+	bottom: 100%;
+	margin-bottom: $LIFT;
+}
+$HOST {
+	left: 12px;
+	top: $HOST_TOP;
+	width: min($WIDTH, calc(100% - 24px));
+}
+$HOST_READER {
+	left: 16px;
+	width: min($WIDTH, calc(100% - 32px));
+}
+$HOST_SPINE {
+	left: calc(var(--sp-side) - 6px);
+	top: 5px;
+	width: min($WIDTH, calc(100% - 2 * var(--sp-side) + 12px));
+}
+$HOST_CONSOLE {
+	left: calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px);
+	width: min($WIDTH, calc(min(100%, 1040px) - var(--cn-gut) + 12px));
+}
+/* over the tray, the target follows the meter Tern lifts above it: else it would sit on the tray's cards, taking
+   their hover and clicks */
+$HOST_TRAY {
+	left: calc(var(--sf-tray-ctx-l, 22px) - 6px);
+	top: calc($TRAY_TOP - var(--sf-tray-lift, 0px));
+	width: min($WIDTH, calc(100% - var(--sf-tray-ctx-l, 22px) - var(--sf-tray-ctx-r, 22px) + 12px));
+}]==]
+
+-- Stacked: the block of rows over the meter's right (or left) end, in every chat style (Spine's too, beside its
+-- working row), as wide as its longest row; the target over it, its edge as far in from the composer's as the
+-- meter's widest copy of the line ends (Spine's `--sp-side`, Console's gutter, the tray's sides).
+local STACK_CSS = [==[
+$METER::before,
+$METER::after {
+	$METER_SIDE
+	width: $LINE_WIDTH;
+	top: auto;
+	bottom: 100%;
+	margin-bottom: $LIFT;
+}
+$METER_SPINE::before,
+$METER_SPINE::after {
+	$SPINE_METER_SIDE
+}
+$METER_TRAY::before,
+$METER_TRAY::after {
+	$METER_SIDE
+}
+$HOST {
+	$HOST_SIDE
+	top: $HOST_TOP;
+	width: min($WIDTH, calc(100% - 24px));
+}
+$HOST_READER {
+	$READER_SIDE
+	width: min($WIDTH, calc(100% - 32px));
+}
+$HOST_SPINE {
+	$SPINE_HOST_SIDE
+	top: $HOST_TOP;
+	width: min($WIDTH, calc(100% - 2 * var(--sp-side) + 12px));
+}
+$HOST_CONSOLE {
+	$CONSOLE_SIDE
+	width: min($WIDTH, calc(min(100%, 1040px) - var(--cn-gut) + 12px));
+}
+$HOST_TRAY {
+	$TRAY_SIDE
+	top: calc($HOST_TOP - var(--sf-tray-lift, 0px));
+	width: min($WIDTH, calc(100% - var(--sf-tray-ctx-l, 22px) - var(--sf-tray-ctx-r, 22px) + 12px));
+}]==]
+
+-- The tips at rest, on the meter's `::after`, which a change's comets take over (pulse_css); it carries its own
+-- track color (the plans' pills and a stacked line's bars use it), as its `::before` does.
 local TIPS_CSS = [==[
 /* each bar's lit tip, where its window stands */
 $METER::after {
 	content: "";
 	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: 100%;
-	margin-bottom: 2px;
-	height: 13px;
+	height: $HEIGHT;
 	background-image: $IMAGES;
 	background-position: $POSITIONS;
 	background-size: $SIZES;
 	background-repeat: no-repeat;
 	pointer-events: none;
+	--ou-track: color-mix(in srgb, var(--t1) 13%, transparent);
 }]==]
 
 -- The line's backdrop at rest, by the Line background setting (see data.luau's BACKDROPS): the target under the
--- line, frosted or opaque in the card's glass, or nothing.
+-- line as Liquid Glass, opaque in the card's glass, or nothing.
 local BACKDROP_CSS: { [string]: string } = {
-	glass = "$HOST {\n\tbackground-color: light-dark(rgb(from var(--card) r g b / 62%), rgb(from var(--pop-bg) r g b / 62%));\n\tbackdrop-filter: blur(10px) saturate(160%);\n}",
+	-- Liquid Glass: a faint tint the chat shows through, softened rather than blurred away (a light blur, more
+	-- saturation), a sheen falling from the top edge and the top-left corner, a lit rim above and a shaded one below.
+	-- Each color is a relative one: Tern drops a gradient stop that is a bare `light-dark()`.
+	glass = [==[
+$HOST {
+	background-color: light-dark(rgb(from var(--card) r g b / 30%), rgb(from var(--pop-bg) r g b / 22%));
+	background-image:
+		linear-gradient(180deg, rgb(from light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 10%)) r g b / alpha), rgb(255 255 255 / 0%) 60%),
+		radial-gradient(90% 160% at 0% 0%, rgb(from light-dark(rgb(255 255 255 / 40%), rgb(255 255 255 / 8%)) r g b / alpha), rgb(255 255 255 / 0%) 70%);
+	backdrop-filter: blur(2.5px) saturate(180%);
+	box-shadow:
+		0 0 0 1px light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 9%)),
+		inset 0 1px 0 light-dark(rgb(255 255 255 / 85%), rgb(255 255 255 / 20%)),
+		inset 0 -1px 0 light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 30%)),
+		0 6px 16px -10px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 60%));
+}
+/* hovered, the opaque capsule as with any background: no sheen, nothing behind to soften */
+$HOST:hover {
+	background-image: none;
+	backdrop-filter: none;
+}]==],
 	solid = "$HOST {\n\tbackground-color: var(--ou-glass);\n}",
 	clear = "",
 }
+
+-- The line's box height in px: a row's 13px, or a stacked line's rows 15px apart.
+local function line_height(line: Line): number
+	return if line.rows then math.max(1, #(line.rows :: { any })) * LINE_ROW - 2 else 13
+end
+
+-- The line as a `content` string: a stacked line's rows broken with `\A`.
+local function line_content(line: Line): string
+	if line.rows == nil then
+		return css_string(line.text)
+	end
+	local rows: { string } = {}
+	for _, row in line.rows :: { { text: string, color: string } } do
+		table.insert(rows, string.sub(css_string(row.text), 2, -2))
+	end
+	return '"' .. table.concat(rows, "\\A ") .. '"'
+end
+
+-- The geometry for Display's Position (ROW_CSS or STACK_CSS), filled for the line's pane.
+local function geometry_css(line: Line, settings: Settings): string
+	local vars: { [string]: string } = {
+		METER = meter(),
+		METER_SPINE = meter(".sf-chat-spine"),
+		METER_TRAY = meter(".sf-tray-ctx"),
+		SPINE_SIDE = SPINE_SIDE,
+		HOST = host(nil),
+		HOST_READER = host(".sf-chat-reader"),
+		HOST_SPINE = host(".sf-chat-spine"),
+		HOST_CONSOLE = host(".sf-chat-console"),
+		HOST_TRAY = host(".sf-tray-ctx"),
+		WIDTH = num(line.glyphs * GLYPH + 12) .. "px",
+		LIFT = num(LIFT_PX) .. "px",
+	}
+	-- the target's top above the hairline: the meter 12px above the column's top, the line LIFT_PX over the meter,
+	-- `height` tall, and the target 1px above the line
+	local function above_top(height: number): string
+		return num(-(13 + LIFT_PX + height)) .. "px"
+	end
+	if settings.place ~= "stack" then
+		local below = settings.place == "below"
+		vars.LINE_Y = if below
+			then "top: calc(100% + 4px);\n\tbottom: auto;\n\tmargin-bottom: 0;"
+			else "top: auto;\n\tbottom: 100%;\n\tmargin-bottom: " .. vars.LIFT .. ";"
+		vars.TRAY_TOP = above_top(line_height(line))
+		vars.HOST_TOP = if below then "5px" else vars.TRAY_TOP
+		-- Tern pads the column 14px above the input and its own rule wins over a plain one: the line's 14px more
+		vars.ROOM = if below
+			then ".sf-dock:not(.sf-chat-spine):not(.sf-tray-ctx) .sf-col[data-role^='omp.editor'] {\n\tpadding-top: 28px !important;\n}"
+			else ""
+		return fill(ROW_CSS, vars)
+	end
+	local right = settings.align == "right"
+	local function side(left: string, right_inset: string?): string
+		return if right then "left: auto;\n\tright: " .. (right_inset or left) .. ";" else "left: " .. left .. ";\n\tright: auto;"
+	end
+	vars.LINE_WIDTH = num(line.glyphs * GLYPH) .. "px"
+	vars.HOST_TOP = above_top(line_height(line))
+	vars.METER_SIDE = side("0")
+	vars.SPINE_METER_SIDE = side(SPINE_SIDE, "calc(" .. SPINE_SIDE .. " - 16px)")
+	vars.HOST_SIDE = side("12px")
+	vars.READER_SIDE = side("16px")
+	vars.SPINE_HOST_SIDE = side("calc(var(--sp-side) - 6px)")
+	vars.CONSOLE_SIDE = side("calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px)", "max(0px, calc((100% - 1040px) / 2))")
+	vars.TRAY_SIDE = side("calc(var(--sf-tray-ctx-l, 22px) - 6px)", "calc(var(--sf-tray-ctx-r, 22px) - 6px)")
+	return fill(STACK_CSS, vars)
+end
 
 local function line_css(line: Line, model: Model, settings: Settings): string
 	local paint = line_paint(line)
@@ -550,30 +970,30 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 	for _ in lit.images do
 		table.insert(clips, "border-box")
 	end
+	local height = num(line_height(line)) .. "px"
 	return fill(LINE_CSS, {
 		METER = meter(),
-		METER_SPINE = meter(".sf-chat-spine"),
-		METER_TRAY = meter(".sf-tray-ctx"),
-		SPINE_SIDE = SPINE_SIDE,
 		CHIPS = line_pane .. " " .. CHIPS,
+		ROOM_TOP = num(ROOM_PX) .. "px",
+		ROOM_UNDER = num(ROOM_PX + 4) .. "px",
 		HOST = host(nil),
-		HOST_READER = host(".sf-chat-reader"),
-		HOST_SPINE = host(".sf-chat-spine"),
-		HOST_CONSOLE = host(".sf-chat-console"),
-		HOST_TRAY = host(".sf-tray-ctx"),
 		PALETTE = palette_css(model, settings),
 		BACKDROP = fill(BACKDROP_CSS[settings.backdrop] or "", { HOST = host(nil) }),
-		CONTENT = css_string(line.text),
+		CONTENT = line_content(line),
+		HEIGHT = height,
+		HOST_HEIGHT = num(line_height(line) + 2) .. "px",
+		WRAP = if line.rows then "pre" else "pre-wrap",
 		PAINT = paint,
 		TIPS_CSS = if #rest.images > 0
 			then fill(TIPS_CSS, {
 				METER = meter(),
+				HEIGHT = height,
 				IMAGES = table.concat(rest.images, ", "),
 				POSITIONS = table.concat(rest.positions, ", "),
 				SIZES = table.concat(rest.sizes, ", "),
 			})
 			else "",
-		WIDTH = num(line.glyphs * GLYPH + 12) .. "px",
+		GEOMETRY = geometry_css(line, settings),
 		HOVER_IMAGES = more(lit.images),
 		HOVER_POSITIONS = more(lit.positions),
 		HOVER_SIZES = more(lit.sizes),
@@ -599,12 +1019,13 @@ end
 -- neither: it draws both itself.
 
 -- An account's windows on one row, each window's saved resets beside it as the line has them (`+NF` for Fable
--- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`.
-local function account_summary(prefix: string, windows: { Window }, provider: string?): (string, number)
+-- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`, each share as the model says it (left or used). The lowest
+-- share left comes back too, for the row's tone.
+local function account_summary(model: Model, prefix: string, windows: { Window }, provider: string?): (string, number)
 	local text = prefix
 	local lowest = 100
 	for _, window in windows do
-		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
+		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. tostring(share_of(model, window.pct)) .. "%"
 		if window.saved then
 			text ..= " +" .. tostring(window.saved) .. (if is_fable(provider, window.bare or window.label) then "F" else "")
 		end
@@ -741,7 +1162,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 			local function one_row(name: string, windows: { Window }, color: string?, rule: boolean)
 				if kept < keep then
 					kept += 1
-					local text, low = account_summary((if several then group.label .. " " else "") .. name, windows, group.id)
+					local text, low = account_summary(model, (if several then group.label .. " " else "") .. name, windows, group.id)
 					if #windows == 0 then
 						for _, detail in details do
 							if detail.account == name and detail.kind ~= "plan" then
@@ -763,7 +1184,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				fold_muted = fold_muted or color ~= nil
 				for _, window in windows do
 					if window.pct < lowest then
-						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. tostring(window.pct) .. "%"
+						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. tostring(share_of(model, window.pct)) .. "%"
 					end
 				end
 				if #windows == 0 and lowest_text == "" then lowest_text = "details" end
@@ -819,9 +1240,9 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						local a, b = window_colors(tone, g)
 						table.insert(new, {
 							text = window_name(window.bare or window.label) .. " window",
-							right = tostring(window.pct) .. "% left",
+							right = tostring(share_of(model, window.pct)) .. "% " .. share_word(model),
 							color = "var(--oc-win-" .. tone .. ")",
-							share = math.clamp(window.pct, 0, 100) / 100,
+							share = math.clamp(share_of(model, window.pct), 0, 100) / 100,
 							a = a,
 							b = b,
 						})
@@ -888,10 +1309,11 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				local tone = tone_of(lowest)
 				table.insert(rows, {
 					text = string.format(
-						"%s+%d more account%s · lowest %s",
+						"%s+%d more account%s · %s %s",
 						if several then group.label .. " " else "",
 						folded,
 						if folded == 1 then "" else "s",
+						if model.used then "most used" else "lowest",
 						lowest_text
 					),
 					color = if fold_muted then "var(--oc-mute)" elseif tone == "ok" then accent else "var(--oc-win-" .. tone .. ")",
@@ -1021,13 +1443,12 @@ local CARD_KEYFRAMES = [==[
 ]==]
 
 -- The card's sheet for its rows. By default it is the hover target's `::after` over the line, rising into place
--- after a beat; `target` (the settings panel's preview) draws the same card, still, on another element.
-local function card_css(rows: { Row }, target: string?): string
-	-- the card's 11px mono glyphs are 6.6px wide; the estimate icons' colors (tokens, API-equivalent value) and
-	-- the plan pill's gold
+-- after a beat, from its left end (from its right end, `at_right`: over a stacked line at the composer's right
+-- edge); `target` (the settings panel's preview) draws the same card, still, on another element.
+local function card_css(rows: { Row }, target: string?, at_right: boolean?): string
+	-- the card's 11px mono glyphs are 6.6px wide; the estimate icons' colors (tokens, API-equivalent value)
 	local GLYPH_W = 6.6
 	local TOKENS_ICON, COST_ICON = "light-dark(#4f5bd5, #8b95ff)", "var(--ok)"
-	local PLAN_A, PLAN_B = "light-dark(#b7791f, #f6c453)", "light-dark(#975a16, #d69e2e)"
 	local width = 28
 	for _, row in rows do
 		local n = glyph_count(row.text)
@@ -1207,10 +1628,14 @@ local function card_css(rows: { Row }, target: string?): string
 	local sizes_css = table.concat(sizes, ", ")
 	return fill(CARD_CSS, {
 		TARGET = target or host(nil) .. ":hover::after",
-		PLACE = if target then "display: block;" else "position: absolute;\n\tleft: 0;\n\tbottom: calc(100% + 8px);",
+		PLACE = if target
+			then "display: block;"
+			else "position: absolute;\n\t" .. (if at_right then "right: 0;" else "left: 0;") .. "\n\tbottom: calc(100% + 8px);",
 		MOTION = if target
 			then ""
-			else "transform-origin: 16px 100%;\n\t/* after a beat: it rises into place and its meters fill */\n\tanimation:\n\t\tomp-usage-card 0.28s var(--out) 0.35s both,\n\t\tomp-usage-fill 0.7s var(--out) 0.4s both;",
+			else "transform-origin: "
+				.. (if at_right then "calc(100% - 16px)" else "16px")
+				.. " 100%;\n\t/* after a beat: it rises into place and its meters fill */\n\tanimation:\n\t\tomp-usage-card 0.28s var(--out) 0.35s both,\n\t\tomp-usage-fill 0.7s var(--out) 0.4s both;",
 		KEYFRAMES = if target then "" else fill(CARD_KEYFRAMES, { FROM_SIZES = table.concat(from_sizes, ", "), SIZES = sizes_css }),
 		CONTENT = table.concat(lines, "\\A "),
 		IMAGES = table.concat(images, ", "),
@@ -1282,15 +1707,17 @@ local function eased(u: number): number
 end
 
 -- The comets, as keyframes over the tips' layers (a head and a trail per bar; a bar that didn't move keeps its
--- tip): the head appears at the bar's start, runs to the share, flares and shrinks into the tip, the trail behind
--- it; in the bar's color when quota went down, `--ok` when it came back.
+-- tip; what doesn't move stays under them): the head appears at the bar's start, runs to the share, flares and
+-- shrinks into the tip, the trail behind it; in the bar's color when quota went down, `--ok` when it came back.
 local function pulse_css(line: Line, p: Pulse): string
 	local frames: { string } = {}
+	local still = statics(line)
 	for _, at in RUN_STOPS do
-		local images: { string } = {}
-		local positions: { string } = {}
-		local sizes: { string } = {}
+		local images: { string } = table.clone(still.images)
+		local positions: { string } = table.clone(still.positions)
+		local sizes: { string } = table.clone(still.sizes)
 		for _, bar in line.bars do
+			local y = bar.row * LINE_ROW + BAR_Y
 			local from = bar.at * GLYPH
 			local to = (bar.at + bar.fill) * GLYPH
 			local x, w, h, trail, ink, strength = to, TIP_W, TIP_H, 0, bar.b, 55
@@ -1319,10 +1746,10 @@ local function pulse_css(line: Line, p: Pulse): string
 			end
 			table.insert(images, tip_image(ink, strength))
 			table.insert(images, trail_image(ink))
-			table.insert(positions, string.format("%spx %spx", num(x - w / 2), num(BAR_Y - h / 2)))
-			table.insert(positions, string.format("%spx %spx", num(x - trail), num(BAR_Y - TRAIL_H / 2)))
-			table.insert(sizes, string.format("%s %spx", fits(bar, w), num(h)))
-			table.insert(sizes, string.format("%s %spx", fits(bar, trail), num(TRAIL_H)))
+			table.insert(positions, string.format("%spx %spx", num(x - w / 2), num(y - h / 2)))
+			table.insert(positions, string.format("%spx %spx", num(x - trail), num(y - TRAIL_H / 2)))
+			table.insert(sizes, string.format("%s %spx", fits(bar.ends, w), num(h)))
+			table.insert(sizes, string.format("%s %spx", fits(bar.ends, trail), num(TRAIL_H)))
 		end
 		table.insert(
 			frames,
@@ -1345,12 +1772,13 @@ local function pulse_css(line: Line, p: Pulse): string
 end
 
 local function sheet(model: Model, settings: Settings, p: Pulse?, hint: string): string
-	if #model.groups == 0 and #model.others == 0 then
+	if #model.groups == 0 and (#model.others == 0 or not settings.parts.others) then
 		return ""
 	end
-	local line = line_of(model)
+	local line = line_of(model, settings)
 	local still = fill(STILL_CSS, { HOST = host(nil), HOST_STILL = host(".sf-still"), METER = meter(), METER_STILL = meter(".sf-still") })
-	local css = line_css(line, model, settings) .. card_css(card(model, hint, settings.card_rows)) .. still
+	local right = settings.place == "stack" and settings.align == "right"
+	local css = line_css(line, model, settings) .. card_css(card(model, hint, settings.card_rows), nil, right) .. still
 	-- Only while it runs: a sheet rewritten later (a countdown tick) must not replay it.
 	if p and #line.bars > 0 and tern.now() < p.until_ms then
 		css ..= pulse_css(line, p)
@@ -1469,6 +1897,7 @@ return {
 	fill = fill,
 	line_of = line_of,
 	line_paint = line_paint,
+	line_height = line_height,
 	tips = tips,
 	FOCUSED_PANE = FOCUSED_PANE,
 	line_pane = current_line_pane,
