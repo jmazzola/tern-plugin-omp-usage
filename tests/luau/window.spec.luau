@@ -21,6 +21,29 @@ local function dock_tree(chip: string, facts: { string }): any
 	return { dock = { id = "dock", c = { { id = "3.bar", c = { extras, chip_node } } } } }
 end
 
+-- The same dock as omp 19.2 draws it (Tern 0.9.36's surface read): ids from the `dock` root, `~N` marks on some
+-- segments, and the status line's own facts (hostname, session, time) before the statuses' `hook-N` ones.
+local function dock_tree_19(chip: string, facts: { string }): any
+	local base = "dock/composer/0/bar/extras~1"
+	local extras = { id = base, k = "status", p = { role = "omp.composer.extras", grow = 1, transparent = true }, c = {} :: { any } }
+	for _, seg in { { "hostname", "" }, { "session", "01a21aa0" }, { "time", "20:30:25" } } do
+		table.insert(extras.c, { id = base .. "/" .. seg[1], k = "seg", p = { role = "omp.composer.fact", spans = { { t = seg[2] } } } })
+	end
+	for i, text in facts do
+		table.insert(extras.c, { id = base .. "/hook-" .. tostring(i - 1), k = "seg", p = { role = "omp.composer.fact", spans = { { t = text } } } })
+	end
+	local chip_node = {
+		id = "dock/composer/0/bar/model~1",
+		k = "row",
+		p = { role = "omp.composer.model" },
+		c = { { id = "dock/composer/0/bar/model~1/name", k = "text", p = { spans = { { t = chip } } } } },
+	}
+	local bar = { id = "dock/composer/0/bar", k = "row", p = { role = "omp.composer.bar" }, c = { chip_node, extras } }
+	return { main = { id = "dock", k = "col", c = { { id = "dock/composer", k = "col", c = { { id = "dock/composer/0", k = "col", c = { bar } } } } } }, surface = { id = "s:1" } }
+end
+local CONTEXT = "◫ ░░░░░░░░░░ 18.1K/1M (1.8%)"
+local HOOK_19 = "dock/composer/0/bar/extras~1/hook-"
+
 -- A window with one omp pane (or `opts.panes`), focused, showing `opts.chip` and `opts.facts`.
 local function agent_window(opts: any?): any
 	local o = opts or {}
@@ -243,6 +266,32 @@ describe("status facts in omp's bar", function()
 		w:advance(6000)
 		eq(w.sheets["usage-facts"], "", "nothing hidden across panes")
 		T.matches(line_text(w), "5H ━━━━━━━━ 33%% left", "the remote pane's line is its status")
+	end)
+
+	it("reads omp 19.2's bar: hides the usage fact the line redraws, and falls back to it once the cache is old", function()
+		local w = agent_window({ surfaces = { [1] = dock_tree_19("Opus 5.5", { CONTEXT, OTHER, USAGE }) } })
+		w:write_cache(F.doc(NOW))
+		w:advance(1000)
+		local sheet = w.sheets.usage or ""
+		ok(string.find(sheet, "[data-id=\"" .. HOOK_19 .. "2\"]", 1, true) ~= nil, "usage fact hidden, by its full id")
+		ok(string.find(sheet, "[data-id=\"" .. HOOK_19 .. "0\"]", 1, true) == nil, "the context gauge stays")
+		T.matches(line_text(w), "demo: other extension$", "the other status ends the line")
+		w:write_cache(F.doc(w.epoch_ms, { observed = w.epoch_ms - 31 * F.M }))
+		w:advance(1000)
+		T.matches(line_text(w), "5H ━━━━━━━━ 33%% left", "31 min: the line is the status")
+	end)
+
+	it("reads omp 19.2's bar: hides the usage status in every agent pane while their lines come from the cache", function()
+		local panes = { { pane = 1, kind = "agent", tab = 1, cwd = "C:\\work" }, { pane = 2, kind = "agent", tab = 1, cwd = "C:\\work" } }
+		local facts = { CONTEXT, OTHER, USAGE }
+		local surfaces = { [1] = dock_tree_19("Opus 5.5", facts), [2] = dock_tree_19("Opus 5.5", facts) }
+		local w = agent_window({ panes = panes, surfaces = surfaces })
+		w:write_cache(F.doc(NOW))
+		w:advance(6000)
+		eq(w.sheets["usage-facts"], ".tn-pane.agent [data-role='omp.composer.bar'] [data-id=\"" .. HOOK_19 .. "2\"] {\n\tdisplay: none !important;\n}\n", "usage hidden, the others kept")
+		w:write_cache(F.doc(w.epoch_ms, { observed = w.epoch_ms - 31 * F.M }))
+		w:advance(6000)
+		eq(w.sheets["usage-facts"], "", "the status is the line's fallback again: shown")
 	end)
 end)
 

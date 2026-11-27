@@ -18,7 +18,9 @@ mkdirSync(outDir, { recursive: true });
 const HOST_SEL = ".tn-pane.on .sf-col[data-role^='omp.editor'] > .sf-row[data-role='omp.composer.chips']";
 const EDITOR_SEL = ".tn-pane.on .sf-col[data-role^='omp.editor']";
 const results = [];
-const profile = new Profile(join(outDir, "profile")).prepare();
+// The overlay's heartbeat keeps omp redrawing: since Tern 0.9.36 / omp 19.2.1 a headless window runs plugin timers only
+// while something in it changes, so an idle omp pane would freeze the line between steps.
+const profile = new Profile(join(outDir, "profile")).prepare({}, { beatMs: 250 });
 const a = new Serve(profile, Number(process.env.SMOKE_PORT_A ?? 47993), "a");
 
 function record(name, pass, seen, evidence = []) {

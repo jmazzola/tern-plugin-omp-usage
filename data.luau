@@ -6,9 +6,10 @@
 
 -- omp's composer bar extras: one `hook-N` fact per `ctx.ui.setStatus` key with `statusLine.showHookStatus`,
 -- or one `status` fact (all keys joined) with the `status` statusline segment, beside the status line's own
--- segments (branch, git, …). Ids carry a generated prefix (`k.` in omp 18.6, `3.` in 18.7), so they are matched
--- by suffix inside the dock region, whose root id is `dock`. Tern renders each fact as a `.sf-seg` whose
--- `data-id` is the fact's id, which is how the line's facts are hidden in the bar.
+-- segments (branch, git, …). Ids carry a generated prefix (`k.` in omp 18.6, `3.` in 18.7) or, with omp 19.2
+-- on Tern 0.9.36, a `~N` mark on some segments (`dock/composer/0/bar/extras~1/hook-2`), so they are matched by
+-- suffix, without the marks, inside the dock region, whose root id is `dock`. Tern renders each fact as a
+-- `.sf-seg` whose `data-id` is the fact's full id, which is how the line's facts are hidden in the bar.
 local DOCK_ROOT = "dock"
 local EXTRAS_SUFFIX = "bar/extras"
 local FACT_PATTERNS = { "/status$", "/hook%-%d+$" }
@@ -297,12 +298,18 @@ local function now_ms(): number
 	return os.time() * 1000
 end
 
+-- A node id without the `~N` segment marks omp 19.2 ids carry (`…/bar/extras~1/hook-2` reads `…/bar/extras/hook-2`).
+local function plain_id(id: string): string
+	return (string.gsub(id, "~%d+", ""))
+end
+
 local function is_status_fact(id: any): boolean
 	if type(id) ~= "string" then
 		return false
 	end
+	local plain = plain_id(id)
 	for _, pattern in FACT_PATTERNS do
-		if string.find(id, pattern) then
+		if string.find(plain, pattern) then
 			return true
 		end
 	end
@@ -342,7 +349,7 @@ end
 
 local function id_ends(suffix: string): (any) -> boolean
 	return function(node: any): boolean
-		return type(node.id) == "string" and string.sub(node.id, -#suffix) == suffix
+		return type(node.id) == "string" and string.sub(plain_id(node.id), -#suffix) == suffix
 	end
 end
 
