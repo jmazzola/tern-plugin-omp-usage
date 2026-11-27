@@ -32,6 +32,11 @@
 -- narrow pane a window that doesn't fit wraps, whole, onto a second line the 13px box cuts off; its tip, on the
 -- meter's `::after`, is sized to nothing past the box's width, so it goes too.
 --
+-- That is the line as it comes. The panel's Display section (data.luau's PARTS, STYLES, PLACES; render.luau's
+-- `line_of`) changes how it looks and where it sits: its windows drawn as blocks, a dial or text alone; the line
+-- under the hairline in every chat style, or stacked, a row per window, over the meter's right or left end; any of
+-- its parts left off; and shares said as used instead of left (the card and the quota details follow).
+--
 -- Hovering the line lifts it into a glass capsule at full strength and, after a beat, opens a card above it with
 -- the facts spelled out: a row and a meter per window, with its reset countdown and clock time, each saved
 -- reset's expiry date, and other statuses. Tern draws its own tooltips from `title` attributes, which a plugin
@@ -170,11 +175,13 @@ local function show_pane(cx: WindowCx, pane: number, settings: Settings, cache: 
 	set_warning(warning_of(model))
 	local hint = settings_hint(shortcut(cx))
 	local running = if pulse and tern.now() < pulse.until_ms then pulse.seq else 0
-	local hidden = table.concat(dock.hide, "\n")
-	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, tostring(settings.card_rows), settings.pace, hint, tostring(running), hidden, line_pane() }, "\n")
+	-- the facts the line redraws (with Other statuses off, only the extension's own: the rest stay in omp's bar)
+	local redrawn = data.redrawn_facts(dock, settings)
+	local hidden = table.concat(redrawn, "\n")
+	local key = table.concat({ model.signature, colors_key(settings), settings.backdrop, tostring(settings.card_rows), settings.pace, data.display_key(settings), hint, tostring(running), hidden, line_pane() }, "\n")
 	if key ~= sheet_key then
 		sheet_key = key
-		install(hide_css(dock.hide) .. sheet(model, settings, pulse, hint))
+		install(hide_css(redrawn) .. sheet(model, settings, pulse, hint))
 	end
 end
 
@@ -395,6 +402,10 @@ local function open_menu(cx: WindowCx)
 				open_accounts(cx2)
 			elseif choice.pick == "plans" then
 				pickers.open_plans(cx2)
+			elseif choice.pick == "display" then
+				pickers.open_display(cx2, choice.kind)
+			elseif choice.pick == "parts" then
+				pickers.open_parts(cx2)
 			elseif choice.pick == "card-rows" then
 				local items: { PickItem } = {}
 				for _, rows in CARD_ROWS do

@@ -642,35 +642,20 @@ function drawn(view, provider, bare) {
 }
 
 // Extra facts use the same account/window labels as the status, but never its percent grammar.
-// Every row stays { text, account?, window?, kind?, valueText? }: a single-line
-// row keeps its quantity/status semantics, while a row that has to wrap is
-// split into plain text so a partly wrapped value is never drawn as one.
+// Every row is { text, account?, window?, kind?, valueText? }, whole however long it is: the hover card and the
+// quota details each wrap a long note themselves, so a note keeps its kind (a stale or failed source reads as
+// one) and no view is left with its first words alone.
 function detailsFor(view, provider, bare) {
   const details = [];
   const add = (detail, account, window) => {
-    const words = cleanText(detail.text).match(/\S{1,67}/gu) ?? [];
-    const lines = [];
-    let line = "";
-    for (const word of words) {
-      if (line && line.length + word.length > 67) {
-        lines.push(line);
-        line = "";
-      }
-      line += (line ? " " : "") + word;
-    }
-    if (line) lines.push(line);
-    const scope = { ...(account ? { account } : {}), ...(window ? { window } : {}) };
-    if (lines.length > 1) {
-      for (const text of lines) details.push({ text, ...scope });
-      return;
-    }
-    const [text] = lines;
-    if (text === undefined) return;
+    const text = cleanText(detail.text);
+    if (!text) return;
     details.push({
       text,
       ...(typeof detail.kind === "string" ? { kind: detail.kind } : {}),
       ...(typeof detail.valueText === "string" ? { valueText: detail.valueText } : {}),
-      ...scope,
+      ...(account ? { account } : {}),
+      ...(window ? { window } : {}),
     });
   };
   for (const { report, bares, account, applies } of accountsFor(view, provider, bare)) {

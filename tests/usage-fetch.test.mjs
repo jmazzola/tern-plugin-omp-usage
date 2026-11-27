@@ -199,6 +199,31 @@ test("a session whose own fetch never succeeded still writes its sources' number
   assert.equal(cache.fetchedAt, T0 - 10_000);
 });
 
+test("a source's long note is written whole, with its kind", async (t) => {
+  const clock = createClock();
+  const omp = createOmp(clock);
+  omp.auto = (call) => call.fail();
+  const { file } = await cacheDir(t);
+  const pool = "keeper:dashboard:anthropic";
+  const metadata = { sourceId: "dashboard", sourceType: "keeper", baseProvider: "anthropic" };
+  const failed = "Keeper cannot read quota for this credential type; leave it out with this source's providers list";
+  const sources = {
+    poll: async () => [
+      { provider: pool, observedAt: T0 - 30_000, metadata: { ...metadata, accountId: "alice" }, limits: [limit(pool, "5h", 5 * HOUR, 0.64, T0 + HOUR)] },
+      { provider: pool, observedAt: T0 - 30_000, stale: true, metadata: { ...metadata, accountId: "bob" }, limits: [] },
+      { provider: pool, observedAt: T0 - 30_000, error: failed, metadata: { ...metadata, accountId: "carol" }, limits: [] },
+    ],
+    resolve: (provider) => provider,
+  };
+  await createSession({ clock, omp, file, models: [OPUS], sources }).start();
+  const notes = readCache(file).providers[pool].details.filter((row) => row.kind === "stale" || row.kind === "error");
+  // Both run past one row of the card (the stale one has a `;` right where a row used to end).
+  assert.deepEqual(notes, [
+    { text: "Stale Keeper snapshot: Keeper hasn't refreshed this quota recently; turn on its scheduled quota refresh", kind: "stale", account: "bob" },
+    { text: failed, kind: "error", account: "carol" },
+  ]);
+});
+
 test("a failed rename is retried once and never leaves the temporary file", async (t) => {
   for (const failures of [1, 2]) {
     const clock = createClock();

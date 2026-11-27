@@ -302,7 +302,13 @@ scenarios.model_switch = async () => {
   const codexChips = ["GPT-6 Luna", "GPT-6-Luna", "GPT-6 Astra", "GPT-6 Sol", "GPT-6.1 Sol", "GPT-6.2 Sol", "GPT-6.2 Astra", "GPT-6.1 Terra"];
   await show(F.doc(t, { chips: claudeChips, codexChips }), (v) => v.line.startsWith("Claude"));
   a.ctl("key", "alt+p");
-  await sleep(1200);
+  // Only with omp's model picker open: text typed without it would land in the composer, and Enter would send it
+  // to the model
+  const picker = await waitFor(() => a.tree(".tn-pane.on .sf-layer .pk-sheet")[0] ?? null, 10_000, 250);
+  if (!picker) {
+    record("model switch: the line follows the chip", null, "omp's model picker didn't open on Alt+P: nothing typed");
+    return;
+  }
   a.ctl("type", "gpt-6-luna");
   await sleep(800);
   const t0 = Date.now();
@@ -561,6 +567,90 @@ scenarios.alerts_two_windows = async () => {
   profile.writeKv({ "omp-usage.alerts": undefined });
 };
 
+// Display: each style's line, then each position with a block right above the composer (an extension's widget, as
+// omp's own progress row is): the sheet parses, the hover target lies over the line's place, and the block ends
+// clear of it.
+scenarios.display = async () => {
+  const t = Date.now();
+  await show(F.doc(t), (v) => v.line.includes("62% left") && !v.dim);
+  const seen = [];
+  const shots = [];
+  let pass = true;
+  const note = (ok, text) => {
+    pass = pass && Boolean(ok);
+    seen.push(`${ok ? "ok" : "NOT OK"}: ${text}`);
+  };
+  // A setting written to kv.json shows once the plugin polls, and a headless window runs its timers only when
+  // something in it changes: a new status each try has omp redraw (as the pace checks do).
+  let nudges = 0;
+  const drawn = async (test) => {
+    for (let i = 0; i < 9; i += 1) {
+      nudges += 1;
+      profile.setStatus(nudges % 2 ? DEFAULT_STATUS.replace("33%", "34%") : DEFAULT_STATUS);
+      const view = await waitFor(() => { const v = profile.view(); return v.line && test(v) ? v : null; }, 5_000, 250);
+      if (view) return view;
+    }
+    return null;
+  };
+  for (const [style, part] of [["blocks", "5H ▰▰▰▰▰▱▱▱ 62% left"], ["ring", "◑ 5H 62% left"], ["compact", "5H 62%  "], ["instrument", "5H ━━━━━━━━ 62% left"]]) {
+    profile.writeKv({ "omp-usage.style": style });
+    const view = await drawn((v) => v.line.includes(part));
+    note(view, `${style}: ${view?.line ?? "not drawn"}`);
+    shots.push(await snap(`display-${style}`));
+  }
+  profile.writeKv({ "omp-usage.metric": "used" });
+  const used = await drawn((v) => v.line.includes("38% used") && v.card?.includes("38% used"));
+  note(used, `Shares Used, on the line and in the card: ${used?.line ?? "not drawn"}`);
+  profile.writeKv({ "omp-usage.metric": undefined });
+  await drawn((v) => v.line.includes("62% left"));
+
+  profile.setWidget("Optimizing skills failed: a row right above the composer, as omp's own progress row is");
+  const blockOf = () => a.tree(".tn-pane.on .sf-dock > *").find((n) => (n.text ?? "").includes("Optimizing skills failed")) ?? null;
+  await waitFor(blockOf, 30_000, 500);
+  const check = join(outDir, "display-check.css");
+  for (const [place, align] of [["above", "right"], ["below", "right"], ["stack", "right"], ["stack", "left"]]) {
+    profile.writeKv({ "omp-usage.place": place, "omp-usage.align": align });
+    // what only that position's sheet has (the line's place on the meter; a stacked line alone is `max-width`ed)
+    const stacked = (v) => v.css.includes("max-width: 100%;");
+    const mark = place === "stack" ? (align === "right" ? "left: auto;\n\tright: 0;" : "left: 0;\n\tright: auto;") : place === "below" ? "padding-top: 28px;" : "margin-bottom: 12px;";
+    const view = await drawn((v) => v.css.includes(mark) && stacked(v) === (place === "stack") && v.css.includes("padding-top: 28px;") === (place === "below"));
+    await sleep(1500);
+    writeFileSync(check, view?.css ?? "");
+    const parsed = a.ctl("css", "probe:display-check", check);
+    a.ctl("css", "probe:display-check");
+    const host = a.tree(HOST_SEL)[0]?.rect;
+    const editor = a.tree(EDITOR_SEL)[0]?.rect;
+    const block = blockOf()?.rect;
+    const name = place === "stack" ? `stacked ${align}` : place;
+    note(view && parsed.ok && (parsed.errors ?? []).length === 0, `${name}: sheet parses (${(parsed.errors ?? []).length} errors)`);
+    if (!host || !editor || !block) {
+      note(false, `${name}: no geometry (host ${JSON.stringify(host)}, composer ${JSON.stringify(editor)}, block ${JSON.stringify(block)})`);
+      continue;
+    }
+    const blockEnd = block[1] + block[3];
+    if (place === "below") {
+      // under the hairline, inside the composer; the block keeps clear of the context bar's labels (12px)
+      note(host[1] >= editor[1] && host[1] + host[3] <= editor[1] + 24, `${name}: the line's target sits inside the composer's top (${host[1] - editor[1]}px down, ${host[3]}px tall)`);
+      note(blockEnd <= editor[1] - 11, `${name}: the block ends ${editor[1] - blockEnd}px above the composer`);
+    } else {
+      // above the hairline; the target is 1px taller than the line either side
+      note(host[1] + host[3] <= editor[1] - 12, `${name}: the line's target ends ${editor[1] - host[1] - host[3]}px above the composer, clear of the context bar`);
+      note(blockEnd <= host[1] + 1, `${name}: the block ends ${host[1] - blockEnd}px above the line's target (${host[3]}px tall)`);
+    }
+    if (place === "stack") {
+      const mid = editor[0] + editor[2] / 2;
+      note(align === "right" ? host[0] > mid : host[0] + host[2] < mid, `${name}: the block is at the composer's ${align} (x ${host[0]}–${host[0] + host[2]} of ${editor[0]}–${editor[0] + editor[2]})`);
+    }
+    shots.push(await snap(`display-${place}-${align}`));
+  }
+  profile.setWidget("");
+  profile.writeKv({ "omp-usage.style": undefined, "omp-usage.place": undefined, "omp-usage.align": undefined });
+  await waitFor(() => (blockOf() ? null : true), 30_000, 500);
+  await drawn((v) => !v.css.includes("max-width: 100%;") && v.line.includes("5H ━━━━━━━━ 62% left"));
+  profile.setStatus(DEFAULT_STATUS);
+  record("Display: styles, Shares, and each position clear of a block above the composer", pass, seen.join("\n"), shots);
+};
+
 const order = [
   "freshness",
   "reset_clock",
@@ -575,6 +665,7 @@ const order = [
   "light_dark",
   "reduce_motion",
   "short_pane",
+  "display",
   "model_switch",
   "unfocused",
   "alerts_two_windows",

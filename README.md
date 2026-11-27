@@ -2,7 +2,7 @@
 
 Your omp usage limits, right above the omp composer's context bar in [Tern](https://stencil.so/tern):
 
-<img src="docs/images/line-current.png" alt="The usage line above the omp composer, on its glass strip: Claude's 7-day window at 35% left with a 2h 12m countdown and a saved reset (+1), then the Fable 7-day window, used up, at 0% left in red" width="748">
+<img src="docs/images/line-current.png" alt="The usage line above the omp composer, on its strip of Liquid Glass: Claude's 7-day window at 39% left with a 3d 9h countdown and a saved reset (+1), then the Fable 7-day window at 26% left" width="748">
 
 ## Quick start
 
@@ -39,8 +39,8 @@ looking while you work: above the composer, every time you glance down, without 
   (`as of 21m ago`), and after 30 minutes the line goes back to omp's own status. A window whose reset time has
   passed reads `reset` until new numbers come.
 - puts what limits you first: on a Fable or Mythos model, the Fable weekly window leads the line
-- stays readable: the line sits on a frosted glass strip (or a solid one, or none), so the chat scrolling under the
-  composer doesn't show through it
+- stays readable: the line sits on a strip of Liquid Glass (or a solid one, or none), so the chat scrolling under the
+  composer only shows through it softened
 - a hover card that fits: you set how many rows it can take, and past that, accounts sum up instead of running off
   the screen
 - each account's plan (`Ultra`, `Pro 200`) on its heading, wherever the provider says which plan it is; switch any of
@@ -53,8 +53,11 @@ looking while you work: above the composer, every time you glance down, without 
 - CLIProxyAPI and CPA Usage Keeper, if you use them: their accounts next to omp's own, and from Keeper, the tokens
   and API-equivalent cost each window has used and roughly what's left
 - the same numbers in every pane, even though every omp session checks usage on its own clock
-- a settings panel (Ctrl+Alt+U) for what shows, the order, each provider's windows and colors, the line's background,
-  pace, the widget bar and alerts
+- [looks how you want](#display): four styles (Instrument, Blocks `▰▰▰▱`, Ring `◔`, Compact text), above the context
+  bar, under it, or stacked a row per window at the composer's right or left. You pick which parts show, and
+  whether shares say what's left or what's used
+- a settings panel (Ctrl+Alt+U) for how the line looks and where it sits, what shows, the order, each provider's
+  windows and colors, the line's background, pace, the widget bar and alerts
 - installs from Tern and sets up its own omp extension
 - updates itself like Tern does: an **Update omp Usage** pill in the widget bar, one click to see what's new and
   install it. Nothing pops up over your work.
@@ -116,7 +119,9 @@ A clone from before 0.5.0 may still be linked to its old `omp-usage` folder, whi
 
 Each provider gets its label, then each window gets its label, a bar filled to the share left, the share, and a
 countdown to its reset. Saved resets come after as `+N` (`+NF` for Claude's Fable resets). While omp shows extension
-statuses in its bar (it does unless you turned them off), any other statuses omp's extensions set go last.
+statuses in its bar (it does unless you turned them off), any other statuses omp's extensions set go last. That's
+the line as it comes: [Display](#display) changes its style, where it sits, which parts show, and whether shares
+say what's left or what's used.
 
 In the Spine chat style it sits just under the bar instead, on the composer's column, out of the way of omp's working
 status:
@@ -126,18 +131,18 @@ status:
 Windows go shortest first, except while a Fable or Mythos model is active: then the Fable weekly window it draws on
 leads, on the line and in the card:
 
-<img src="docs/images/line-fable.png" alt="With Fable 5.2 picked in the composer, the usage line starts with Claude's Fable 7-day window at 14% left, then the 7-day window at 54% left with a saved reset" width="722">
+<img src="docs/images/line-fable.png" alt="With Fable 5.2 picked in the composer, the usage line starts with Claude's Fable 7-day window, amber at 25% left, then the 7-day window at 38% left with a saved reset" width="748">
 
 A window at 25% left or less turns amber, and at 10% or less, red. When a share actually changes, the line prints
 again while a comet runs the bar to its new level: in the provider's color when quota went down, green when it came
 back. With Reduce Motion on (Tern's or the system's), nothing moves. Once a window's reset time has passed, it reads
 `reset` (`5H reset`) until omp fetches its new numbers.
 
-Tern's chats scroll under the composer, so the line sits on a frosted glass strip that blurs whatever is behind it.
-**Line background** in the panel makes it Solid, or Clear (no background at all). Here's the same moment Clear, then
-Glass:
+Tern's chats scroll under the composer, so the line sits on a strip of Liquid Glass: a faint tint with a lit rim and a
+sheen, which softens the chat behind it without hiding it. **Line background** in the panel makes it Solid (opaque),
+or Clear (no background at all). Here's the same moment Clear, then Glass:
 
-<img src="docs/images/line-background.png" alt="The usage line over a line of command output scrolling under the composer: on top, Clear, the line's text tangled with the output's; below, Glass, the line on a frosted strip with the output blurred away behind it" width="722">
+<img src="docs/images/line-background.png" alt="The usage line over command output scrolling under the composer: on top, Clear, the line's text tangled with the output's; below, Glass, the line on a faintly tinted strip with a lit rim, the output behind it dimmed and softened but still there" width="748">
 
 Hover the line and after a beat the card opens: a row and a meter per window, its reset countdown and clock time, its
 pace, then when each saved reset expires, and the other statuses. The last row names the shortcuts for the quota
@@ -192,6 +197,75 @@ shows is old, else under the provider that is, and in the quota details beside i
 
 Past 30 minutes they're not shown at all, and the line falls back to the session's own status in omp's bar. Numbers
 stay old when `omp usage` keeps failing (offline, an expired login), even while omp sessions keep running.
+
+## Display
+
+**Display** in the panel changes how the line looks and where it sits (from the palette: **Line style…**, **Line
+position…**, **What the line shows…** and **Shares…** under **omp Usage: Settings…**). Until you pick something
+there, the line is drawn as it always was.
+
+### Style
+
+How each window is drawn. Top to bottom, Instrument, Blocks, Ring and Compact:
+
+<img src="docs/images/display-styles.png" alt="The same usage line in the four styles, one under the other, each above the composer's context bar: Instrument with slim bars and lit tips, Blocks with rows of filled and empty blocks, Ring with a small dial before each window, and Compact with text only" width="748">
+
+| Style | A window reads |
+| --- | --- |
+| **Instrument** (default) | `7D ━━━━━━━━ 40% left`: a slim bar filled to the share, with a lit tip |
+| **Blocks** | `7D ▰▰▰▱▱▱▱▱ 40% left`: eight blocks (six with several providers on the line), filled one by one. One stays filled while anything is left |
+| **Ring** | `◑ 7D 40% left`: a dial before the window, in quarter steps (`○ ◔ ◑ ◕ ●`), whichever is nearest |
+| **Compact** | `7D 40%`: text only, without the bar or the word `left`. With Shares on Used it keeps the word (`7D 60% used`), so a bare share always means what's left |
+
+Colors, warnings (amber at 25% left, red at 10%) and fading work the same in every style. When a share changes, the
+comets run on Instrument's and Blocks' bars; Ring and Compact print the line again without them.
+
+### Position
+
+- **Above the bar** (default): over the context bar, where it has always been (in Spine, just under it).
+- **Under the bar**: between the context bar and the input, in every chat style. The input moves down a line to make
+  room, in every omp pane, so nothing jumps when focus moves. While Tern's agents tray is open, the context bar
+  sits above the tray, and the line stays right under it: the tray's cards move down a line instead.
+- **Stacked**: a block over the end of the chat, at the composer's **Right** (default) or **Left**, with a row per
+  window and the columns lined up. It shows up to 4 rows; with more, the last row sums up the rest (`+2 more · lowest
+  7D 58%`). The hover card opens from the same side.
+
+<img src="docs/images/display-stacked.png" alt="Stacked, at the composer's right edge: a block of three rows over the end of a chat, Claude's weekly window, its Fable weekly window in amber at 18% left with Claude repeated faintly before it, and Codex's weekly window, each with its bar, share, countdown and saved resets in lined-up columns" width="748">
+
+A provider with several windows is named on its first row and repeated, faintly, on the others, so every row starts
+at the same column (an account, too). A stacked row takes one color (its window's warning tone), so the provider's
+colors go to the bars. Whatever omp shows right above the composer (its working status, a progress row, an
+extension's widget) moves up to stay clear of the block, so only the chat itself scrolls under it. In a pane
+narrower than its longest row, the rows are cut off at the right (see [Troubleshooting](#troubleshooting)).
+
+Above and Under the bar keep to one line. In a pane too narrow for it, the windows that don't fit are left out
+whole, and three dots after the last one that fits say there are more (the card has them all). A pane too narrow
+even for the first window's share gets a shorter line instead: the shares alone, without bars, countdowns or
+names (`5H 62% · 7D 41% +1…`), so a share is the last thing a narrow pane loses.
+
+The hover card never leaves its pane: where the pane has less room than the card needs, the card's text shrinks to
+fit. A source's long note (a stale Keeper snapshot, a failed refresh) takes as many rows of the card as it needs.
+
+### On the line
+
+Switch any part of the line off: **Provider**, **Window** (`5H`, `7D`), **Bar**, **Share** (`40%`), **Countdown**,
+**Saved resets** (`+1`), **Plan** and **Other statuses**.
+
+- A window always keeps its bar or its share: the last of the two can't be switched off. Compact has no bar, so
+  there it's the share.
+- **Plan** is off until you turn it on. It puts each account's plan after its provider or account as a gold pill,
+  like the card's.
+- With **Other statuses** off, what omp's other extensions set stays in omp's own bar instead of moving up to the
+  line.
+
+The card and the quota details show everything either way.
+
+### Shares
+
+**Left** (default) says what's left of each window (`40% left`), **Used** what's gone (`60% used`): on the line, in
+the card and in the quota details, and bars and dials fill to match. Used is always 100 minus what Left would show,
+so the two add up: `>99% used` where Left reads `<1%`, and `100% used` at `0% left`. Warning colors, alerts and the
+widget bar still go by what's left.
 
 ## Widget bar
 
@@ -268,6 +342,7 @@ Changes apply right away, in every window.
 | Section | What it does |
 | --- | --- |
 | Preview | The line and its card, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default. An estimate under a bar takes a row; everything else Keeper reports goes in the quota details. Then **Line background**: Glass (default), Solid, or Clear. Then **Show pace**: Off, When ahead (default), or Always (see [Pace](#pace)) |
+| Display | How the line looks and where it sits (see [Display](#display)). **Style**: Instrument (default), Blocks, Ring or Compact. **Position**: Above the bar (default; in Spine, under it), Under the bar, or Stacked (a block over the chat, a row per window, up to 4; past that the last row sums up the rest), at the composer's **Right** (default) or **Left**. **On the line**: provider, window, bar, share, countdown, saved resets, plan (a gold pill, off by default) and other statuses; a window keeps its bar or its share. **Shares**: Left (default) or Used, on the line, the card and the quota details |
 | Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers**. When there's no quota data for them, the line falls back to the focused session's own status |
 | Providers | Pick a row up by its grip, then click where it goes. Click a window to hide or show it everywhere. The switch adds the provider to Selected. A provider or account whose plan is known shows it as a gold pill beside its switch: click the pill to leave that plan out of the card and the quota details (it fades and is struck through), again to show it. With several accounts, each one gets its own row: grip, name (click it to show only that account, again for all), windows, plan, and a switch that takes it off the line, the card and the quota details. A chip next to the provider says what's showing, with a button for the next option: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 2 Max, 4 Pro, 4 Ultra ✕` (or `by plan · 6 with 5H, 4 without ✕`) with **all in one**, or `only dev.ops ✕`. Grouped by windows, each account's row is tagged with its group (`5H`, `no 5H`) |
 | Colors | A preset, a named alternative (Ember, Sunset, Moss, Ocean, Orchid, Slate, Theme accent), or **Custom…** hex colors (`#d97757`, or two: `#9aa7b4, #5b8def`). A custom color that's nearly white gets a darker shade in the light theme, and one that's nearly black a lighter one in the dark theme, so it never vanishes into the card |
@@ -278,14 +353,14 @@ Changes apply right away, in every window.
 External quota sources are set up in a file, not the panel (see [External quota sources](#external-quota-sources)).
 Their accounts show up under Providers like omp's own.
 
-<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line with its card open, Claude's weekly window with a saved reset, its Fable weekly window with a 1.2× pace · empty ~2d 3h row, and Codex's weekly window with four saved resets; the Card height and Line background pills; Show pace with three pills, Off, When ahead (picked) and Always; the Show choices with All providers picked; Claude and Codex with their windows' shares, plan pills and Selected switches; and their color swatches" width="605">
+<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line with its card open, Claude's weekly window with a pace row and a saved reset, its Fable weekly window in amber at 25% left with a 1.5× pace · empty ~1d 5h row, and Codex's weekly window with four saved resets; the Card height and Line background pills; Show pace with three pills, Off, When ahead (picked) and Always; the Display section with its four styles, Instrument picked, its three positions, Above the bar picked, the On the line pills, all on but Plan, and Shares on Left; the Show choices with All providers picked; Claude and Codex with their windows' shares, plan pills and Selected switches; and their color swatches" width="788">
 
 Further down, the Widget bar and Alerts sections, here with alerts on:
 
 <img src="docs/images/settings-alerts.png" alt="The settings panel's Widget bar section, which says its Plugin segments widget shows a gauge, and a warning like Claude 1.4× pace while a window in the focused omp pane runs ahead, and where a click opens the Settings panel (picked) or the Quota details; and its Alerts section with Toast when a window runs low switched On and what it toasts" width="605">
 
-Prefer the keyboard? **omp Usage: Settings…** in the palette has all the same options as menus. **Plans…** and
-**Reorder providers…** only show when there's something to pick or reorder.
+Prefer the keyboard? **omp Usage: Settings…** in the palette has all the same options as menus. **Plans…**,
+**Reorder providers…** and **Stacked at…** only show when there's something to pick or reorder.
 
 **All providers**, one after another. Each provider's heading carries its plan, with a bar in its colors beside its
 rows:
@@ -315,7 +390,7 @@ into one:
 In the panel, click an account's name to show only that one (click it again, or the chip next to the provider, to go
 back to all of them). The switches take accounts off the line and the card:
 
-<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the preview shows only dev.ops on the line and in its card, with pace rows under its weekly and Fable weekly windows, and the others summed up a row each; under it the Card height and Line background pills and Show pace's Off, When ahead (picked) and Always pills; then the chip only dev.ops beside Claude and a row per account with its grip, name, windows, plan and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; Codex below" width="605">
+<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the preview shows only dev.ops on the line and in its card, with pace rows under its weekly and Fable weekly windows, and the others summed up a row each; under it the Card height and Line background pills, Show pace's Off, When ahead (picked) and Always pills, and the Display and Show sections; then the chip only dev.ops beside Claude and a row per account with its grip, name, windows, plan and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; Codex below" width="788">
 
 That gives the line room for all of that account's windows, and the card sums up the others in a row each:
 
@@ -461,6 +536,13 @@ A few things to know:
 | An omp pane over SSH or in WSL shows different numbers, or no line | That's on purpose: the numbers omp Usage reads are this computer's, so those panes show their own omp's status instead. Set the extension up in the omp there (`omp plugin link ./omp` in a clone) and keep omp's extension statuses on (`statusLine.showHookStatus`, on by default) |
 | The line says `usage cache too big to read` | The file the extension writes is over 1 MiB (very many accounts and models). Restart your omp sessions: an up-to-date extension writes it much smaller |
 | The hover card is cut off at the top of a short pane | It opens above the line, and Tern doesn't tell plugins how tall a pane is. Open the quota details (Alt+Shift+U), or pick a smaller **Card height** |
+| A stacked line's rows are cut off, ending in `…` | The pane is narrower than the block's longest row. Tern doesn't tell plugins how wide a pane is, so Stacked can't fall back to one line there. Widen the pane, switch some parts off (**On the line**), pick **Compact**, or pick another **Position** |
+| The line ends in three dots and some windows are missing | The pane is narrower than the line, so the windows that don't fit are left out (see [Position](#position)). Hover for the card, widen the pane, pick **Compact**, or switch some parts off (**On the line**) |
+| The line shows only shares (`5H 62% · 7D 41%…`), no bars or names | The pane is too narrow for the first window with its bar, so the line shows its short form (see [Position](#position)). Widen the pane, or hover for the card |
+| The hover card's text is small | The pane has less room than the card needs, so the card shrinks to stay inside it. Widen the pane, or open the quota details (Alt+Shift+U) |
+| A stale or failed source's long note isn't in its warning color in the hover card | An omp session started before this update wrote the note in two parts, without saying what it is. The card joins the parts again; restart your omp sessions for the color |
+| The stacked block covers the end of the chat | That's where Stacked sits: over the chat, at the composer's edge. Pick the other side, or **Above the bar** or **Under the bar**, which take a line of their own |
+| Other extensions' statuses are back in omp's bar | **Other statuses** (Display › On the line) is off: the line doesn't draw them, so omp does |
 | omp's usage text shows in other omp panes' bars | omp shows extension statuses in every pane, and omp Usage hides its own there, since the line shows it better. Tern's styles can't tell panes apart, so while any omp pane needs that text as its fallback (over SSH, in WSL, a model with no numbers), it shows in every pane |
 | The session cost stays in omp's bar while other segments drop out | That's omp Usage's `bar.css`: Tern cuts the session cost before any status segment, so with a long status line (the `full` preset) it would never show. Keeping it makes Tern drop the lowest-priority segments instead. The same sheet styles the Update omp Usage pill and centers the gauge in its chip |
 | The line stopped after an omp or Tern update | omp may have renamed something the plugin reads. Ask omp to fix `omp-usage` |

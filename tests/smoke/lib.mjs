@@ -45,11 +45,20 @@ const SCAFFOLDS = [
 
 export const DEFAULT_STATUS = "Claude 5h ███░░░░░ 33% left (1h 2m) · 7d ██████░░ 77% left (3d 4h)";
 
+// On Windows the rename fails (EPERM, EBUSY) while Tern has the file open to read it: a few tries, 50 ms apart.
 function writeAtomic(path, text) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  for (let tries = 0; ; tries += 1) {
+    try {
+      renameSync(tmp, path);
+      return;
+    } catch (err) {
+      if (tries >= 10 || !["EPERM", "EBUSY", "EACCES"].includes(err.code)) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
 }
 
 export class Profile {
@@ -167,6 +176,12 @@ export class Profile {
     writeAtomic(join(this.root, "status.txt"), text);
   }
 
+  // A widget demo-status.js shows above the composer, as an extension's would (it reads this every 2 s): the kind
+  // of block that sits right above the line. Empty: none.
+  setWidget(text) {
+    writeAtomic(join(this.root, "widget.txt"), text);
+  }
+
   // The plugin's last installed sheet (`usage` or `usage-facts`), as the scaffold wrote it; null before any.
   sheet(name = "usage") {
     const path = join(this.data, `qa-${name}.css`);
@@ -196,13 +211,20 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
-const usage = () => { try { return readFileSync(join(here, "status.txt"), "utf8").trim(); } catch { return ""; } };
+const read = (name) => { try { return readFileSync(join(here, name), "utf8").trim(); } catch { return ""; } };
+const usage = () => read("status.txt");
 export default function demoStatus(pi) {
   pi.on("session_start", async (_event, ctx) => {
     let last = usage();
+    let widget = "";
     ctx.ui.setStatus("qa-usage", last);
     ctx.ui.setStatus("qa-other", "demo: other extension");
-    setInterval(() => { const now = usage(); if (now !== last) { last = now; ctx.ui.setStatus("qa-usage", now); } }, 2000);${
+    setInterval(() => {
+      const now = usage();
+      if (now !== last) { last = now; ctx.ui.setStatus("qa-usage", now); }
+      const block = read("widget.txt");
+      if (block !== widget) { widget = block; ctx.ui.setWidget("qa-widget", block ? block.split("\\n") : undefined); }
+    }, 2000);${
   beatMs > 0 ? `\n    let beat = 0;\n    setInterval(() => { beat += 1; ctx.ui.setStatus("qa-beat", "beat " + beat); }, ${beatMs});` : ""
 }
   });

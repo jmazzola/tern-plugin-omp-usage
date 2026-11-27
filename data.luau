@@ -142,7 +142,7 @@ local CARD_ROWS_DEFAULT = 26
 -- composer, so a line over bare transcript text can be hard to read. Glass unless set.
 local KV_BACKDROP = "omp-usage.backdrop"
 local BACKDROPS: { { id: string, label: string, detail: string } } = {
-	{ id = "glass", label = "Glass", detail = "frosted: what scrolls behind it blurs away" },
+	{ id = "glass", label = "Glass", detail = "Liquid Glass: the chat behind shows through, softened" },
 	{ id = "solid", label = "Solid", detail = "the card's glass, opaque" },
 	{ id = "clear", label = "Clear", detail = "nothing: the line over whatever is behind it" },
 }
@@ -155,6 +155,44 @@ local USAGE_OPENS: { { id: string, label: string, detail: string } } = {
 	{ id = "details", label = "Quota details", detail = "every account and window in full" },
 }
 local USAGE_OPENS_DEFAULT = "panel"
+-- How the line looks (render.luau's `line_of`), set in the panel's Display section: which of its parts show (by
+-- part id, those switched from their default), whether a share is what's left of a window or what's gone (the
+-- card and the quota details say it the same way), the style its windows are drawn in, and where it sits. A part's
+-- `default` is whether it shows unless switched; the plan shows in the card either way.
+local KV_PARTS = "omp-usage.line-parts"
+local PARTS: { { id: string, label: string, detail: string, default: boolean } } = {
+	{ id = "provider", label = "Provider", detail = "its name; accounts always keep theirs", default = true },
+	{ id = "window", label = "Window", detail = "5H, 7D, Fable 7D", default = true },
+	{ id = "bar", label = "Bar", detail = "the bar, blocks or dial the style draws", default = true },
+	{ id = "share", label = "Share", detail = "54%", default = true },
+	{ id = "reset", label = "Countdown", detail = "to the window's reset, with one provider on the line", default = true },
+	{ id = "saved", label = "Saved resets", detail = "+1, +2F", default = true },
+	{ id = "plan", label = "Plan", detail = "a gold pill after the provider or account", default = false },
+	{ id = "others", label = "Other statuses", detail = "what omp's other extensions set; off, they stay in omp's bar", default = true },
+}
+local KV_METRIC = "omp-usage.metric"
+local METRICS: { { id: string, label: string, detail: string } } = {
+	{ id = "left", label = "Left", detail = "what's left of each window" },
+	{ id = "used", label = "Used", detail = "how much of each window is gone" },
+}
+local KV_STYLE = "omp-usage.style"
+local STYLES: { { id: string, label: string, detail: string, sample: string } } = {
+	{ id = "instrument", label = "Instrument", detail = "a slim bar with a lit tip", sample = "7D ━━━━━━ 54%" },
+	{ id = "blocks", label = "Blocks", detail = "whole blocks, filled one by one", sample = "7D ▰▰▰▱▱▱ 54%" },
+	{ id = "ring", label = "Ring", detail = "a dial in quarter steps before each window", sample = "◑ 7D 54%" },
+	{ id = "compact", label = "Compact", detail = "text only", sample = "5H 64% · 7D 54%" },
+}
+local KV_PLACE = "omp-usage.place"
+local PLACES: { { id: string, label: string, detail: string } } = {
+	{ id = "above", label = "Above the bar", detail = "over the context bar (in Spine, under it)" },
+	{ id = "below", label = "Under the bar", detail = "between the context bar and the input, in every chat style" },
+	{ id = "stack", label = "Stacked", detail = "a block over the chat, a row per window, up to 4" },
+}
+local KV_ALIGN = "omp-usage.align"
+local ALIGNS: { { id: string, label: string, detail: string } } = {
+	{ id = "right", label = "Right", detail = "at the composer's right edge" },
+	{ id = "left", label = "Left", detail = "at the composer's left edge" },
+}
 -- In KV_ACCOUNT, in place of an account's name: show the provider's accounts combined, all in one set of windows
 -- (COMBINED), or a set per plan (COMBINED_PLANS: the plan each account reports, else the accounts that report the
 -- same windows); each window's share their average (see `combined`).
@@ -232,13 +270,17 @@ export type Reset = { at: number, count: number, window: string? }
 -- it faint.
 export type Group = { key: string, id: string?, label: string, windows: { Window }, resets: { Reset }?, rest: { Window }?, details: { Detail }?, as_of: string?, age: number? }
 -- What the line and card show, where it came from (a change counts only between two lines from the same
--- source), and the card's title.
+-- source), the card's title, whether shares are said as used (Display's Shares; a window's `pct` is always
+-- what's left), and what is wrong with the cache file, when something is (the last of `others`: the line says it
+-- even with Other statuses off).
 export type Model = {
 	groups: { Group },
 	others: { string },
 	source: string,
 	title: string,
 	signature: string,
+	used: boolean,
+	trouble: string?,
 }
 -- `hide`: the ids of the status facts the line redraws, to hide in the bar; `texts`: every status fact's text, by
 -- id; `remote`: the pane is on another machine (its omp writes no cache here); `seen`: its surface could be read.
@@ -284,6 +326,11 @@ export type Settings = {
 	usage_opens: string,
 	pace: string,
 	alerts: boolean,
+	parts: { [string]: boolean },
+	metric: string,
+	style: string,
+	place: string,
+	align: string,
 }
 
 -- The cache file as last read (decoded or not: each text is decoded once), the last parse that decoded, the
@@ -771,8 +818,14 @@ local detail_values: { [string]: boolean } = {
 	observed = true,
 }
 
+-- Before 0.9 the extension broke a note longer than WRAPPED_AT characters into rows that wide, as plain text (a
+-- cache a session that hasn't restarted still writes): a row that only fits that pattern reads on as the note it
+-- was, so no view shows the first row alone, cut off mid-sentence.
+local WRAPPED_AT = 67
 local function details_of(value: any): { Detail }
 	local details: { Detail } = {}
+	-- how long the row before is, while it is plain text that the next may carry on
+	local open: number? = nil
 	if type(value) == "table" then
 		for _, item in ipairs(value) do
 			if type(item) == "table" and type(item.text) == "string" and item.text ~= "" then
@@ -781,13 +834,24 @@ local function details_of(value: any): { Detail }
 				if kind ~= nil and detail_values[kind] and value_text == nil then
 					kind = nil
 				end
-				table.insert(details, {
-					text = item.text,
-					account = if type(item.account) == "string" then item.account else nil,
-					window = if type(item.window) == "string" then item.window else nil,
-					kind = kind,
-					value = if kind ~= nil then value_text else nil,
-				})
+				local account = if type(item.account) == "string" then item.account else nil
+				local window = if type(item.window) == "string" then item.window else nil
+				local plain = item.kind == nil and item.valueText == nil
+				local last = details[#details]
+				local word = string.match(item.text, "^%S+") or ""
+				if plain and open and last and last.account == account and last.window == window and (open :: number) + (utf8.len(word) or #word) > WRAPPED_AT then
+					last.text ..= " " .. item.text
+				else
+					table.insert(details, {
+						text = item.text,
+						account = account,
+						window = window,
+						kind = kind,
+						value = if kind ~= nil then value_text else nil,
+					})
+				end
+				local length = utf8.len(item.text) or #item.text
+				open = if plain and length <= WRAPPED_AT then length else nil
 			end
 		end
 	end
@@ -1148,6 +1212,29 @@ local function id_list(value: any): { string }
 	return list
 end
 
+-- The choice of `list` (BACKDROPS, STYLES, …) whose id `value` is, else the list's first (its default).
+local function choice_in(list: { { id: string, label: string, detail: string } }, value: any): string
+	for _, choice in list do
+		if value == choice.id then
+			return choice.id
+		end
+	end
+	return list[1].id
+end
+
+-- The parts the line shows, as `settings.parts` and the style have them: a style without a bar (Compact) has
+-- none to show, and a window always shows at least its bar or its share, so with neither on it shows its share.
+local function line_parts(settings: Settings): { [string]: boolean }
+	local on = table.clone(settings.parts)
+	if settings.style == "compact" then
+		on.bar = false
+	end
+	if not on.bar and not on.share then
+		on.share = true
+	end
+	return on
+end
+
 local function load_settings(): Settings
 	local settings: Settings = {
 		mode = "current",
@@ -1164,7 +1251,17 @@ local function load_settings(): Settings
 		usage_opens = usage_opens(),
 		pace = PACE_DEFAULT,
 		alerts = store.get(KV_ALERTS) == true,
+		parts = {},
+		metric = choice_in(METRICS, store.get(KV_METRIC)),
+		style = choice_in(STYLES :: any, store.get(KV_STYLE)),
+		place = choice_in(PLACES, store.get(KV_PLACE)),
+		align = choice_in(ALIGNS, store.get(KV_ALIGN)),
 	}
+	local parts = store.get(KV_PARTS)
+	for _, part in PARTS do
+		local stored = if type(parts) == "table" then parts[part.id] else nil
+		settings.parts[part.id] = if type(stored) == "boolean" then stored else part.default
+	end
 	local mode = store.get(KV_MODE)
 	if mode == "all" or mode == "selected" then
 		settings.mode = mode
@@ -2091,13 +2188,36 @@ local function build_model(settings: Settings, dock: Dock, cache: Cache?): Model
 	if trouble then
 		table.insert(others, trouble :: string)
 	end
+	local used = settings.metric == "used"
 	return {
 		groups = groups,
 		others = others,
 		source = source,
 		title = title :: string,
-		signature = signature_of(groups, others, title :: string) .. "\npace " .. settings.pace,
+		signature = signature_of(groups, others, title :: string) .. "\npace " .. settings.pace .. (if used then "\nused" else ""),
+		used = used,
+		trouble = trouble,
 	}
+end
+
+-- A window's share as the model says it (Display's Shares): what's left, or what's gone. Used is 100 less the share
+-- left as it reads (`pct_text`: whole percents rounded down, `<1%` below one), so the two always add up: `29%` used
+-- for `71%` left, `>99%` where left reads `<1%`, `100%` at `0%`. A window whose reset has passed reads `reset` either
+-- way. `share_of` is the number its bar fills to; warning colors go by what's left in both.
+local function share_of(model: Model, pct: number): number
+	return if model.used then 100 - pct else pct
+end
+
+local function share_label(model: Model, window: Window): string
+	if not model.used or window.passed then
+		return pct_text(window)
+	end
+	return if window.under then ">99%" else tostring(100 - window.pct) .. "%"
+end
+
+-- The word after a share: `left`, or `used`.
+local function share_word(model: Model): string
+	return if model.used then "used" else "left"
 end
 
 -- Each window's share, by provider and window (a window whose reset has passed has none yet).
@@ -2253,6 +2373,15 @@ local function hidden_key(settings: Settings): string
 	return table.concat(parts, ";")
 end
 
+-- Display's settings as one string (the metric is in the model's signature).
+local function display_key(settings: Settings): string
+	local parts: { string } = { settings.style, settings.place, settings.align }
+	for _, part in PARTS do
+		table.insert(parts, part.id .. "=" .. tostring(settings.parts[part.id]))
+	end
+	return table.concat(parts, ";")
+end
+
 -- A dock with nothing read from it (no pane has shown the line since a reload).
 local NO_DOCK: Dock = { status = nil, chip = nil, viewing = false, hide = {}, texts = {}, remote = false, seen = false }
 
@@ -2266,6 +2395,21 @@ local function own_fact(text: string): boolean
 		end
 	end
 	return #pieces > 0
+end
+
+-- The status facts to hide in the focused pane's bar: those the line redraws. With Other statuses off (Display's On
+-- the line) it redraws only this extension's own, so the others stay where omp draws them.
+local function redrawn_facts(dock: Dock, settings: Settings): { string }
+	if settings.parts.others then
+		return dock.hide
+	end
+	local ids: { string } = {}
+	for _, id in dock.hide do
+		if own_fact(dock.texts[id] or "") then
+			table.insert(ids, id)
+		end
+	end
+	return ids
 end
 
 -- The status facts to hide in every agent pane's bar, not only the focused one's (whose facts the line redraws):
@@ -2331,6 +2475,21 @@ return {
 	BACKDROPS = BACKDROPS,
 	KV_USAGE_OPENS = KV_USAGE_OPENS,
 	USAGE_OPENS = USAGE_OPENS,
+	KV_PARTS = KV_PARTS,
+	PARTS = PARTS,
+	KV_METRIC = KV_METRIC,
+	METRICS = METRICS,
+	KV_STYLE = KV_STYLE,
+	STYLES = STYLES,
+	KV_PLACE = KV_PLACE,
+	PLACES = PLACES,
+	KV_ALIGN = KV_ALIGN,
+	ALIGNS = ALIGNS,
+	line_parts = line_parts,
+	share_of = share_of,
+	share_label = share_label,
+	share_word = share_word,
+	redrawn_facts = redrawn_facts,
 	usage_opens = usage_opens,
 	COMBINED = COMBINED,
 	COMBINED_PLANS = COMBINED_PLANS,
@@ -2386,6 +2545,7 @@ return {
 	changes = changes,
 	colors_key = colors_key,
 	hidden_key = hidden_key,
+	display_key = display_key,
 	NO_DOCK = NO_DOCK,
 	cache_seen = cache_seen,
 }

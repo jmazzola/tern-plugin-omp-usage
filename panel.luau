@@ -26,6 +26,17 @@ local KV_PACE = data.KV_PACE
 local PACES = data.PACES
 local KV_USAGE_OPENS = data.KV_USAGE_OPENS
 local USAGE_OPENS = data.USAGE_OPENS
+local PARTS = data.PARTS
+local KV_METRIC = data.KV_METRIC
+local METRICS = data.METRICS
+local KV_STYLE = data.KV_STYLE
+local STYLES = data.STYLES
+local KV_PLACE = data.KV_PLACE
+local PLACES = data.PLACES
+local KV_ALIGN = data.KV_ALIGN
+local ALIGNS = data.ALIGNS
+local line_parts = data.line_parts
+local display_key = data.display_key
 local COMBINED = data.COMBINED
 local COMBINED_PLANS = data.COMBINED_PLANS
 local now_ms = data.now_ms
@@ -61,6 +72,7 @@ local last_card_runs = render.last_card_runs
 local fill = render.fill
 local line_of = render.line_of
 local line_paint = render.line_paint
+local line_height = render.line_height
 local tips = render.tips
 local palette_css = render.palette_css
 local card = render.card
@@ -104,8 +116,8 @@ local flush_panel: (cx: WindowCx) -> ()
 -- previews changes. Its clicks arrive as `canvas_action` events. Tern keeps canvases across reloads, so a
 -- reload takes over the one it finds.
 local PANEL_TITLE = "omp Usage settings"
-local PANEL_ABOUT = "Settings for the omp Usage line above omp's composer: what it shows, the providers' order, "
-	.. "their windows and their colors. Each button changes one setting at once and runs nothing else."
+local PANEL_ABOUT = "Settings for the omp Usage line by omp's composer: how it looks and where it sits, what it shows, "
+	.. "the providers' order, their windows and their colors. Each button changes one setting at once and runs nothing else."
 local PANEL_SHEET = "panel"
 local PANEL_ROLE = "omp-usage.panel"
 local DOCK_ROLE = "omp-usage.panel-dock"
@@ -265,6 +277,17 @@ $P .oup-opt .sf-icon {
 $P .oup-opt-d {
 	font: 400 11.5px/15px var(--sans);
 	color: var(--t3);
+}
+/* a style's sample, in the line's font */
+$P .oup-opt-s {
+	font: 500 10px/15px var(--mono);
+	font-variant-numeric: tabular-nums;
+	white-space: pre;
+	color: var(--t2);
+}
+/* Display's sub-headings over its option rows */
+$P .oup-sub {
+	margin-top: 4px;
 }
 /* the providers, a row each in the line's order: grip, index, swatch and label, what is left, then the Selected
    switch, which drops under the rest when the pane is narrow */
@@ -855,6 +878,11 @@ $P .oup-pill[data-on] {
 	background-color: rgb(from var(--accent) r g b / 16%);
 	box-shadow: 0 0 0 1px rgb(from var(--accent) r g b / 55%);
 }
+/* a part the style has none of, or the last of a window's bar and share: shown, but not switchable */
+$P .oup-pill[aria-disabled] {
+	opacity: 0.55;
+	cursor: default;
+}
 /* under the Preview: the card's height limit, its note on a line of its own, and the warning while the card
    outgrows it */
 $P .oup-limit {
@@ -1123,10 +1151,14 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "Which windows say their pace" } }, pace_pills),
 		ui.el("span", { class = "oup-note", text = pace_note }),
 	})
-	-- the stage's padding, the card (its rows and padding), the gap and the line: see `.oup-stage`, CARD_CSS
+	-- the stage's padding, the card (its rows and padding), the gap and the line's box: see `.oup-stage`, CARD_CSS
+	-- (the line as a pane with room draws it: the preview has no narrow copy to switch to)
+	local line = line_of(preview, settings, true)
+	local stacked = settings.place == "stack"
+	local line_box = if stacked then line_height(line) + 2 else 15
 	local most = build.most_rows(settings, providers, cache, hint)
 	if most > 0 then
-		table.insert(rules, string.format("%s .oup-stage {\n\tmin-height: %dpx;\n}", PANEL, 28 + most * CARD_ROW + 14 + 8 + 15))
+		table.insert(rules, string.format("%s .oup-stage {\n\tmin-height: %dpx;\n}", PANEL, 28 + most * CARD_ROW + 14 + 8 + line_box))
 	end
 	if #preview.groups == 0 and #preview.others == 0 then
 		return section("preview", "Preview", "what the composer shows, its card open as on a hover", {
@@ -1138,19 +1170,43 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 			pace,
 		})
 	end
-	local line = line_of(preview)
 	table.insert(rules, palette_css(preview, settings, PANEL .. " .oup-stage"))
 	local rest = tips(line, 55)
-	table.insert(rules, string.format("%s .oup-line {\n\tbackground-image: %s;\n}", PANEL, line_paint(line)))
-	if #rest.images > 0 then
+	table.insert(
+		rules,
+		string.format(
+			"%s .oup-line {\n\tbackground-image: %s;%s\n}",
+			PANEL,
+			line_paint(line),
+			-- a line longer than the stage keeps room for its dots, as on the composer
+			if stacked then "" else "\n\tpadding-right: " .. render.reserve(line, "100%") .. ";"
+		)
+	)
+	-- Stacked: the block of rows as wide as its longest, at the composer's right or left, its card rising from
+	-- that end
+	if stacked then
+		local side = if settings.align == "right" then "flex-end" else "flex-start"
 		table.insert(
 			rules,
 			string.format(
-				"%s .oup-line::after {\n\tcontent: \"\";\n\tposition: absolute;\n\tleft: 0;\n\tright: 0;\n\ttop: 0;\n\theight: 13px;\n\tbackground-image: %s;\n\tbackground-position: %s;\n\tbackground-size: %s;\n\tbackground-repeat: no-repeat;\n\tpointer-events: none;\n}",
+				"%s .oup-line {\n\talign-self: %s;\n\twidth: %dpx;\n\theight: %dpx;\n\twhite-space: pre;\n}\n%s .oup-card {\n\talign-self: %s;\n}",
+				PANEL, side, line.glyphs * 6, line_box, PANEL, side
+			)
+		)
+	end
+	-- the tips' layer, and a stacked line's faint repeats (its text), as the composer's has them
+	if #rest.images > 0 or line.ghosts ~= nil then
+		local some = #rest.images > 0
+		table.insert(
+			rules,
+			string.format(
+				"%s .oup-line::after {\n\tcontent: %s;\n\tposition: absolute;\n\tleft: 0;\n\tright: 0;\n\ttop: 0;\n\theight: %dpx;\n\toverflow: hidden;\n\twhite-space: pre;\n\tcolor: var(--t4);\n\tbackground-image: %s;\n\tbackground-position: %s;\n\tbackground-size: %s;\n\tbackground-repeat: no-repeat;\n\tpointer-events: none;\n}",
 				PANEL,
-				table.concat(rest.images, ", "),
-				table.concat(rest.positions, ", "),
-				table.concat(rest.sizes, ", ")
+				render.ghost_content(line),
+				line_height(line),
+				if some then table.concat(rest.images, ", ") else "none",
+				if some then table.concat(rest.positions, ", ") else "0 0",
+				if some then table.concat(rest.sizes, ", ") else "auto"
 			)
 		)
 	end
@@ -1204,6 +1260,101 @@ function build.show(settings: Settings, providers: { Provider }): Node
 		)
 	end
 	return section("show", "Show", nil, { ui.el("div", { class = "oup-modes" }, options) })
+end
+
+-- A row of pills, one per choice of `list`, the one `current` names on; a click sends `<act>=<id>`.
+function build.pills(label: string, aria: string, list: { { id: string, label: string, detail: string } }, current: string, act: string): Node
+	local pills: { Node } = {}
+	local note = ""
+	for _, choice in list do
+		local on = choice.id == current
+		if on then
+			note = choice.label .. ": " .. choice.detail .. "."
+		end
+		table.insert(pills, ui.el("button", {
+			class = "oup-pill",
+			text = choice.label,
+			actions = { click = act .. "=" .. choice.id },
+			attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+		}))
+	end
+	return ui.el("div", { class = "oup-urow" }, {
+		ui.el("span", { class = "oup-ulabel", text = label }),
+		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = aria } }, pills),
+		ui.el("span", { class = "oup-note", text = note }),
+	})
+end
+
+-- How the line looks (see data.luau's PARTS, STYLES, PLACES): its style and its place as options with a sample,
+-- the side of a stacked line, which parts show, and whether shares are what's left or what's used. A part the
+-- style has none of (Compact's bar) can't be switched, nor the last of a window's bar and share.
+function build.display(settings: Settings): Node
+	local function options(list: { any }, current: string, act: string): Node
+		local nodes: { Node } = {}
+		for _, choice in list do
+			local on = choice.id == current
+			local head: { Node } = { ui.el("span", { class = "oup-opt-t", text = choice.label }) }
+			if on then
+				table.insert(head, ui.node("icon", { name = "check" }))
+			end
+			local body: { Node } = { ui.el("span", { class = "oup-opt-head" }, head) }
+			if choice.sample then
+				table.insert(body, ui.el("span", { class = "oup-opt-s", text = choice.sample }))
+			end
+			table.insert(body, ui.el("span", { class = "oup-opt-d", text = choice.detail }))
+			table.insert(nodes, ui.el("button", {
+				key = act .. "-" .. choice.id,
+				class = "oup-opt",
+				actions = { click = act .. "=" .. choice.id },
+				attrs = { ["data-on"] = if on then true else nil, ["aria-pressed"] = if on then "true" else "false" },
+			}, body))
+		end
+		return ui.el("div", { class = "oup-modes" }, nodes)
+	end
+	local shown = line_parts(settings)
+	local parts: { Node } = {}
+	local locked_note: string? = nil
+	for _, part in PARTS do
+		local on = shown[part.id]
+		-- Compact has no bar; and the last of a window's bar and share stays
+		local locked = (part.id == "bar" and settings.style == "compact")
+			or (on and (part.id == "bar" or part.id == "share") and not (shown.bar and shown.share))
+		if locked and on then
+			locked_note = "A window keeps its bar or its share: switch the other on to take this one off."
+		end
+		table.insert(parts, ui.el("button", {
+			class = "oup-pill",
+			text = part.label,
+			actions = if locked then nil else { click = "display-part=" .. part.id },
+			attrs = {
+				["data-on"] = if on then true else nil,
+				["aria-pressed"] = if on then "true" else "false",
+				["aria-disabled"] = if locked then "true" else nil,
+				title = part.detail,
+			},
+		}))
+	end
+	local body: { Node } = {
+		ui.el("span", { class = "oup-ulabel oup-sub", text = "Style" }),
+		options(STYLES, settings.style, "display-style"),
+		ui.el("span", { class = "oup-ulabel oup-sub", text = "Position" }),
+		options(PLACES, settings.place, "display-place"),
+	}
+	if settings.place == "stack" then
+		table.insert(body, build.pills("Stacked at", "Which side of the composer the stacked line sits at", ALIGNS, settings.align, "display-align"))
+	end
+	table.insert(body, ui.el("div", { class = "oup-urow" }, {
+		ui.el("span", { class = "oup-ulabel", text = "On the line" }),
+		ui.el("div", { class = "oup-pills", attrs = { role = "group", ["aria-label"] = "What the line shows of each window" } }, parts),
+		ui.el("span", {
+			class = "oup-note",
+			text = locked_note
+				or (if settings.style == "compact" then "Compact draws no bar. " else "")
+					.. "The card and the quota details still show everything.",
+		}),
+	}))
+	table.insert(body, build.pills("Shares", "Whether a share is what's left or what's used", METRICS, settings.metric, "display-metric"))
+	return section("display", "Display", "how the line looks and where it sits", body)
 end
 
 -- The plan an account names (`account` nil: a provider's single account), as a pill at the end of its row that
@@ -1756,6 +1907,8 @@ local function panel_state(cx: WindowCx, settings: Settings, cache: Cache?): Pan
 		settings.usage_opens,
 		settings.pace,
 		tostring(alerts.enabled()),
+		settings.metric,
+		display_key(settings),
 		update.interval().id,
 		(function(): string
 			local title, sub = update_status()
@@ -1807,6 +1960,7 @@ local function panel_parts(state: PanelState): (Node, Node, string)
 	end
 	local view = ui.el("div", { role = PANEL_ROLE }, {
 		build.preview(state.settings, state.preview, rules, settings_hint(state.keys), state.providers, state.cache),
+		build.display(state.settings),
 		build.show(state.settings, state.providers),
 		build.providers(state.settings, state.providers),
 		build.colors(state.settings, state.providers, rules),
@@ -2021,6 +2175,27 @@ tern.on("canvas_action", function(ev: CanvasAction, cx: WindowCx): boolean
 			return false
 		end
 		toggle_plan(id, name)
+	elseif act == "display-part" then
+		if not pickers.toggle_part(value) then
+			return false
+		end
+	elseif act == "display-style" or act == "display-metric" or act == "display-place" or act == "display-align" then
+		-- not `place`: that one drops a provider or account picked up to move
+		local lists: { [string]: { list: { any }, key: string } } = {
+			["display-style"] = { list = STYLES, key = KV_STYLE },
+			["display-metric"] = { list = METRICS, key = KV_METRIC },
+			["display-place"] = { list = PLACES, key = KV_PLACE },
+			["display-align"] = { list = ALIGNS, key = KV_ALIGN },
+		}
+		local list, key = lists[act].list, lists[act].key
+		local known = false
+		for _, choice in list do
+			known = known or choice.id == value
+		end
+		if not known then
+			return false
+		end
+		store.set(key, value)
 	elseif act == "usage-opens" then
 		local known = false
 		for _, choice in USAGE_OPENS do

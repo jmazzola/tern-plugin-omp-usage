@@ -18,8 +18,12 @@ local tone_of = data.tone_of
 local is_fable = data.is_fable
 local window_name = data.window_name
 local palette_for = data.palette_for
-local pct_text = data.pct_text
 local pace_text = data.pace_text
+local plan_in = data.plan_in
+local line_parts = data.line_parts
+local share_of = data.share_of
+local share_label = data.share_label
+local share_word = data.share_word
 
 local SHEET = "usage"
 -- A saved reset expiring this soon reads `--warn` in the card (the extension flags it with `!` in the line).
@@ -36,6 +40,25 @@ local BAR_GLYPHS = 8
 local COMPACT_BAR_GLYPHS = 6 -- with several providers on the line
 local BAR_Y = 7.25 -- px: the bar glyphs' center in the line's 13px box
 local TIP_W, TIP_H = 10, 6
+-- Blocks' filled and empty blocks, and Ring's dials, a quarter apart (all 0.6em wide in the line's font, too).
+local BLOCK_ON, BLOCK_OFF = "▰", "▱"
+local DIALS = { "○", "◔", "◑", "◕", "●" }
+-- A stacked line (Display's Stacked): at most this many rows, 15px apart (its font's line height).
+local STACK_ROWS = 4
+local LINE_ROW = 15
+-- Above the hairline, the line's box ends this far over the meter: Tern (0.9.32) draws the context labels (`29%`,
+-- `1M`) from 1px above the meter's top, and the backdrop's 1px rim and drop shadow reach below the box. 2px of room
+-- left the rim on the labels' glyphs; LIFT_PX clears them, and the room above the composer grows by the same amount.
+local LIFT_PX = 5
+local ROOM_PX = 15 + LIFT_PX - 2
+-- A single line too wide for its box ends in three dots, in DOTS_PX it keeps free for them at its end.
+local DOTS_PX = 12
+-- The slack in a test of a box's width against a threshold (see `within`).
+local EDGE = 0.25
+-- How far the hover card may pass its target's far end: to about the composer's edge.
+local CARD_PASS = 12
+-- The plan pill's gold, in the card and on the line.
+local PLAN_A, PLAN_B = "light-dark(#b7791f, #f6c453)", "light-dark(#975a16, #d69e2e)"
 -- The comet: its head and trail, and where in the run (0–1) it sets off, arrives and has flared.
 local HEAD_W, HEAD_H = 18, 7
 local TRAIL_W, TRAIL_H = 34, 2
@@ -73,8 +96,11 @@ local function last_card_runs(): { [string]: number }
 	return card_runs
 end
 
+-- `s` as a CSS string. Tern reads a `;`, a brace or `/*` in one as text (checked with a `content`), so only the
+-- quote and the backslash are escaped; a line break would end the string, and goes with any other control
+-- character.
 local function css_string(s: string): string
-	return '"' .. s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", " ") .. '"'
+	return '"' .. s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("%c", " ") .. '"'
 end
 
 -- Fills `$NAME` placeholders (CSS has no `$`).
@@ -134,10 +160,309 @@ end
 
 -- `dim`: a provider's numbers that are old (see data.luau's FRESH_MS), drawn faint.
 type Paint = { from: number, to: number, color: string, dim: boolean? }
--- A window's bar: its first glyph, its length and how many glyphs it fills (a fraction), the glyph its window
--- ends at, the window's key (provider and label) and its colors.
-type Bar = { at: number, glyphs: number, fill: number, ends: number, key: string, a: string, b: string, dim: boolean? }
-type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
+-- A window's bar: its first glyph, its length and how many glyphs it fills (a fraction; whole blocks in Blocks),
+-- the glyph its window ends at (0 on a stacked line, which doesn't wrap), the window's key (provider and label),
+-- its colors and its row (0 but on a stacked line). `boxed`: drawn as boxes in the tips' layer under blank glyphs
+-- (a stacked line's Instrument bars: its rows take a color each, so its text can't fill a bar).
+type Bar = { at: number, glyphs: number, fill: number, ends: number, key: string, a: string, b: string, row: number, boxed: boolean, dim: boolean? }
+-- A plan's pill around its glyphs (a no-break space of padding either side), as a bar is placed.
+type Pill = { at: number, glyphs: number, ends: number, row: number, dim: boolean? }
+-- A stacked line's row: its text, in one color.
+type StackRow = { text: string, color: string, dim: boolean? }
+-- `rows`: a stacked line's rows (`text` has them a line each). `ghosts`: while a provider or account runs over
+-- several of them, what each row repeats of it, faint, in the glyphs `text` leaves blank there ("": nothing), so
+-- every row starts at the same column; `hovered`: each row with its repeats in (the hover's copy, in one color).
+-- `marks`: where a single line may wrap (the glyph of each plain space), and the glyph what follows it ends at: while
+-- that doesn't fit and wraps onto the cut-off row, three dots there say so (see `statics`).
+-- `need`: the glyph a single line's first window has its share by. A box too narrow for that draws `short` instead,
+-- the line's narrow copy (see `line_of`); `from` and `to` are the box widths (px) a line shows in, the line from
+-- `from` up and its copy under `to`.
+type Line = {
+	text: string,
+	glyphs: number,
+	paints: { Paint },
+	bars: { Bar },
+	pills: { Pill },
+	rows: { StackRow }?,
+	ghosts: { string }?,
+	hovered: { string }?,
+	marks: { { at: number, ends: number } }?,
+	need: number?,
+	short: Line?,
+	from: number?,
+	to: number?,
+}
+
+-- A window's bar in `style`, `n` glyphs long for a share of `share`%: its text and how many glyphs it fills.
+-- Blocks fill whole blocks, at least one while anything is there (`some`: a share that reads `<1%` is something).
+local function bar_text(style: string, n: number, share: number, some: boolean): (string, number)
+	local fill = math.clamp(share, 0, 100) / 100 * n
+	if style == "blocks" then
+		local on = math.round(fill)
+		if some then
+			on = math.max(on, 1)
+		end
+		return string.rep(BLOCK_ON, on) .. string.rep(BLOCK_OFF, n - on), on
+	end
+	return string.rep(BAR, n), fill
+end
+
+-- Ring's dial for a share: empty, a quarter, half, three quarters or full, whichever is nearest.
+local function dial(share: number): string
+	return DIALS[math.round(math.clamp(share, 0, 100) / 25) + 1]
+end
+
+-- A saved reset's count as the line has it: `+2`, `+2F` for Claude's Fable resets.
+local function saved_text(group_id: string?, window: Window): string
+	return "+" .. tostring(window.saved) .. (if is_fable(group_id, window.label) then "F" else "")
+end
+
+-- The other statuses the line draws: all of them, or with Other statuses off (Display's On the line) only what is
+-- wrong with the cache file, which is this plugin's to say.
+local function others_on(model: Model, on: { [string]: boolean }): { string }
+	if on.others then
+		return model.others
+	end
+	return if model.trouble then { model.trouble :: string } else {}
+end
+
+-- A stacked line's row before it is laid out: a window (what's before it, its plan, label, countdown and saved
+-- resets as the row has them), or, without one, `head` alone (a provider with details and no windows).
+-- `head` has blanks where the row repeats a provider or account named on a row above; `ghost` has those repeats
+-- (and blanks where `head` has text), `full` both.
+type StackEntry = {
+	head: string,
+	ghost: string?,
+	full: string?,
+	plan: string?,
+	label: string,
+	window: Window?,
+	reset: string,
+	saved: string,
+	key: string,
+	a: string,
+	b: string,
+	color: string,
+	dim: boolean?,
+}
+
+-- A stacked line: a row per window, its columns lined up (what's before the window, its plan, Ring's dial, label,
+-- bar, share, countdown and saved resets), then the other statuses a row each. Past STACK_ROWS rows the last one
+-- sums up the rest: `+3 more · lowest 7D 5%`. A row takes one color (its window's tone, faint while its provider's
+-- numbers are old), so the provider's colors go to its bar: Instrument's are boxes laid under blank glyphs (see
+-- `statics`), Blocks' keep their glyphs. A window whose reset has passed reads `5H reset` there too.
+-- A provider (and an account) is named in its row's color on its first row, and repeated, faint, on its other rows
+-- (`ghosts`, drawn on the tips' layer: the row's own text is one color), so no row starts with a blank indent.
+-- With Provider switched off nothing is repeated: accounts name their first row alone, as on the line.
+local function stack_of(model: Model, settings: Settings): Line
+	local on = line_parts(settings)
+	local style = settings.style
+	local ring = on.bar and style == "ring"
+	local barred = on.bar and (style == "instrument" or style == "blocks")
+	-- Compact drops the word after a share, but not `used`: a bare `38%` reads as what's left
+	local word = if style == "compact" and not model.used then "" else " " .. share_word(model)
+	local entries: { StackEntry } = {}
+	for g, group in model.groups do
+		local dim = if group.as_of then true else nil
+		if #group.windows == 0 then
+			table.insert(entries, { head = group.label .. " details", label = "", reset = "", saved = "", key = "", a = "", b = "", color = group_color(g, "a"), dim = dim })
+		end
+		for w, window in group.windows do
+			local account = if window.lead then window.account else nil
+			local head, ghost, full = "", "", ""
+			local function name(s: string, first: boolean)
+				local gap = if full ~= "" then " " else ""
+				local blank = string.rep(" ", glyph_count(s))
+				head ..= gap .. (if first then s else blank)
+				ghost ..= gap .. (if first then blank else s)
+				full ..= gap .. s
+			end
+			if on.provider and group.label ~= "" then
+				name(group.label, w == 1)
+				if window.account then
+					name(window.account :: string, window.lead == true)
+				end
+			elseif account then
+				name(account :: string, true)
+			end
+			local repeats = string.find(ghost, "%S") ~= nil
+			local a, b = window_colors(tone_of(window.pct), g)
+			table.insert(entries, {
+				head = head,
+				ghost = if repeats then (string.gsub(ghost, "%s+$", "")) else nil,
+				full = if repeats then full else nil,
+				plan = if on.plan and (w == 1 or account ~= nil) then plan_in(group.details, account) else nil,
+				label = if on.window then string.upper(window.bare or window.label) else "",
+				window = window,
+				reset = if on.reset and window.reset then window.reset :: string else "",
+				saved = if on.saved and window.saved then saved_text(group.id, window) .. (if window.expires then "!" else "") else "",
+				key = group.key .. "/" .. window.label,
+				a = a,
+				b = b,
+				color = "var(--ou-num-" .. tone_of(window.pct) .. ")",
+				dim = dim,
+			})
+		end
+	end
+	local others = others_on(model, on)
+	local more: string? = nil
+	local more_color = "var(--ou-soft)"
+	if #entries + #others > STACK_ROWS then
+		local keep = STACK_ROWS - 1
+		local lowest: StackEntry? = nil
+		for i = keep + 1, #entries do
+			local window = entries[i].window
+			if window and not window.passed and (lowest == nil or window.pct < ((lowest :: StackEntry).window :: Window).pct) then
+				lowest = entries[i]
+			end
+		end
+		more = string.format("+%d more", #entries + #others - keep)
+		if lowest then
+			local low = lowest :: StackEntry
+			local window = low.window :: Window
+			more = string.format(
+				"%s · %s %s%s",
+				more :: string,
+				if model.used then "most used" else "lowest",
+				if low.label ~= "" then low.label .. " " else "",
+				share_label(model, window)
+			)
+			if tone_of(window.pct) ~= "ok" then
+				more_color = low.color
+			end
+		end
+		others = table.move(others, 1, math.max(0, keep - #entries), 1, {})
+		entries = table.move(entries, 1, math.min(keep, #entries), 1, {})
+	end
+	-- the columns' widths
+	local head_w, label_w, share_w, reset_w = 0, 0, 0, 0
+	for _, entry in entries do
+		local window = entry.window
+		if window then
+			local head = glyph_count(entry.head)
+			if entry.plan then
+				head += (if head > 0 then 1 else 0) + glyph_count(entry.plan :: string) + 2
+			end
+			head_w = math.max(head_w, head)
+			label_w = math.max(label_w, glyph_count(entry.label))
+			if not window.passed then
+				share_w = math.max(share_w, glyph_count(share_label(model, window)))
+			end
+			reset_w = math.max(reset_w, glyph_count(entry.reset))
+		end
+	end
+	local rows: { StackRow } = {}
+	local ghosts: { string } = {}
+	local hovered: { string } = {}
+	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {}, pills = {}, rows = rows }
+	for _, entry in entries do
+		local window = entry.window
+		if window == nil then
+			table.insert(rows, { text = entry.head, color = entry.color, dim = entry.dim })
+			continue
+		end
+		local at_row = #rows
+		local row = ""
+		local function cell(s: string, width: number, gap: number)
+			if row ~= "" then
+				row ..= string.rep(" ", gap)
+			end
+			row ..= s .. string.rep(" ", width - glyph_count(s))
+		end
+		if head_w > 0 then
+			local head = entry.head
+			if entry.plan then
+				local at = glyph_count(head) + (if head ~= "" then 1 else 0)
+				head ..= (if head ~= "" then " " else "") .. " " .. (entry.plan :: string) .. " "
+				table.insert(line.pills, { at = at, glyphs = glyph_count(head) - at, ends = 0, row = at_row, dim = entry.dim })
+			end
+			cell(head, head_w, 0)
+		end
+		if ring then
+			cell(if window.passed then "" else dial(share_of(model, window.pct)), 1, 2)
+		end
+		if label_w > 0 then
+			cell(entry.label, label_w, if ring then 1 else 2)
+		end
+		if window.passed then
+			-- `reset`, then on to where the other rows' saved resets start
+			local to = glyph_count(row)
+				+ (if barred then 1 + BAR_GLYPHS else 0)
+				+ (if on.share then 1 + share_w + glyph_count(word) else 0)
+				+ (if reset_w > 0 then 2 + reset_w else 0)
+				- (if row == "" then 1 else 0)
+			cell("reset", 0, 1)
+			row ..= string.rep(" ", to - glyph_count(row))
+		else
+			local share = share_of(model, window.pct)
+			if barred then
+				if row ~= "" then
+					row ..= " "
+				end
+				local text, filled = bar_text(style, BAR_GLYPHS, share, share > 0 or window.under == true)
+				local boxed = style == "instrument"
+				table.insert(line.bars, {
+					at = glyph_count(row),
+					glyphs = BAR_GLYPHS,
+					fill = filled,
+					ends = 0,
+					key = entry.key,
+					a = entry.a,
+					b = entry.b,
+					row = at_row,
+					boxed = boxed,
+					dim = entry.dim,
+				})
+				row ..= if boxed then string.rep(" ", BAR_GLYPHS) else text
+			end
+			if on.share then
+				local said = share_label(model, window)
+				cell(string.rep(" ", share_w - glyph_count(said)) .. said .. word, share_w + glyph_count(word), 1)
+			end
+			if reset_w > 0 then
+				cell(entry.reset, reset_w, 2)
+			end
+		end
+		if entry.saved ~= "" then
+			cell(entry.saved, 0, 2)
+		end
+		table.insert(rows, { text = row, color = entry.color, dim = entry.dim })
+		ghosts[#rows] = entry.ghost or ""
+		if entry.ghost then
+			-- the row starts with `head`: its repeats go in the blanks there
+			hovered[#rows] = (entry.full :: string) .. string.sub(row, #entry.head + 1)
+		end
+	end
+	for _, other in others do
+		table.insert(rows, { text = other, color = "var(--ou-soft)" })
+	end
+	if more then
+		table.insert(rows, { text = more :: string, color = more_color })
+	end
+	local texts: { string } = {}
+	local repeats = false
+	for i, row in rows do
+		row.text = (string.gsub(row.text, "%s+$", ""))
+		ghosts[i] = ghosts[i] or ""
+		hovered[i] = (string.gsub(hovered[i] or row.text, "%s+$", ""))
+		repeats = repeats or ghosts[i] ~= ""
+		line.glyphs = math.max(line.glyphs, glyph_count(row.text))
+		table.insert(texts, row.text)
+	end
+	if repeats then
+		line.ghosts, line.hovered = ghosts, hovered
+	end
+	line.text = table.concat(texts, "\n")
+	return line
+end
+
+-- The box width (px) from which what ends at glyph `ends` of a single line is on its row: with DOTS_PX to spare for
+-- the dots, or, for the line itself, once all of it fits (it keeps no room then, see `reserve`). The narrow copy
+-- only shows where the line doesn't fit, so it always keeps the room.
+local function fit_px(line: Line, ends: number): number
+	local px = ends * GLYPH + DOTS_PX
+	return if line.to then px else math.min(px, line.glyphs * GLYPH - 0.5)
+end
 
 -- One provider: `Claude  5H ━━━━━━━━ 98% left  3h 57m · 7D ━━━━━━━━ 71% left  11h 37m  +1 · <other statuses>`.
 -- Several (the composer is at most ~115 glyphs wide) go compact, the countdowns and the word `left` left to the
@@ -147,17 +472,31 @@ type Line = { text: string, glyphs: number, paints: { Paint }, bars: { Bar } }
 -- A window whose reset has passed reads `5H reset`, without a bar, until new numbers come; a provider whose
 -- numbers are old is drawn faint (the card says how old). Pace stays in the card: the line has no room for it.
 -- Each window's parts are joined by no-break spaces (a provider's label with its first window) so it wraps
--- whole; with them, what colors each part. `compact` overrides the format the number of providers picks.
-local function line_of(model: Model, compact: boolean?): Line
+-- whole; with them, what colors each part. Display's settings pick the parts (a plan rides after its provider or
+-- account as a gold pill), the style (Blocks: `▰▰▰▱`, Ring: a dial before the window, Compact: no bar and no
+-- `left`) and whether a share is what's left or what's used.
+-- `short`: the line's narrow copy instead, for a pane too narrow for the line's first window: the shares alone, as
+-- short as they go (`5H 62% · 7D 41% +1 · bob  5H 20%`), so a share is the last thing a narrow pane loses. No bars,
+-- dials, countdowns, plans or `left`, and its first window isn't named (its window and share stay together); what
+-- follows wraps away whole, as on the line.
+local function single_line(model: Model, settings: Settings, short: boolean): Line
+	local on = line_parts(settings)
+	local style = settings.style
 	local parts: { string } = {}
-	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {} }
-	local several = if compact ~= nil then compact else #model.groups > 1
+	local line: Line = { text = "", glyphs = 0, paints = {}, bars = {}, pills = {} }
+	local marks: { { at: number, ends: number } } = {}
+	local several = #model.groups > 1
+	-- several providers on the line, or its narrow copy: no countdown, no `left`, a saved reset's expiry as `!`
+	local brief = several or short
 	local bar_glyphs = if several then COMPACT_BAR_GLYPHS else BAR_GLYPHS
 	local dim = false
 	local function add(s: string, color: string?)
 		local n = glyph_count(s)
 		if color then
 			table.insert(line.paints, { from = line.glyphs, to = line.glyphs + n, color = color, dim = if dim then true else nil })
+		end
+		if string.sub(s, 1, 1) == " " then
+			table.insert(marks, { at = line.glyphs, ends = 0 }) -- a plain space: the line may wrap here
 		end
 		table.insert(parts, s)
 		line.glyphs += n
@@ -176,89 +515,193 @@ local function line_of(model: Model, compact: boolean?): Line
 		end
 		for w, window in group.windows do
 			local tone = tone_of(window.pct)
+			local share = share_of(model, window.pct)
+			local accent = group_color(g, "a")
+			local a, b = window_colors(tone, g)
 			local account = if window.lead then window.account else nil
+			-- The line's first window can't wrap away whole (nothing would be left): in a pane too narrow for it, it
+			-- breaks between its own parts instead, so it ends after a whole part, never inside a number. (Where it
+			-- has a share, a pane that narrow draws the narrow copy, whose first window stays whole.)
+			local first = line.glyphs == 0
+			local lead = first and not short
 			if w > 1 and several and account == nil then
 				add(" " .. NBSP)
 			else
 				next_part()
 			end
-			if w == 1 and group.label ~= "" then
-				add(group.label, group_color(g, "a"))
-				add(if account then NBSP else NBSP .. NBSP)
-			end
-			if account then
-				add(unbroken(account :: string), group_color(g, "a"))
-				add(NBSP .. NBSP)
-			end
-			add(unbroken(string.upper(window.bare or window.label)), "var(--ou-lbl)")
-			add(NBSP)
-			if window.passed then
-				add("reset", "var(--ou-soft)")
-			else
+			-- each part after the window's first `gap` no-break spaces after the one before: one between the
+			-- window's own parts, two after what names it; returns the glyph the part starts at
+			local started, own = false, false
+			local function put(s: string, color: string?, gap: number?): number
+				if started then
+					add(string.rep(if lead then " " else NBSP, gap or (if own then 1 else 2)))
+				end
 				local at = line.glyphs
-				add(string.rep(BAR, bar_glyphs))
-				add(NBSP)
-				add(pct_text(window), "var(--ou-num-" .. tone .. ")")
-				if not several then
-					add(NBSP .. "left", "var(--ou-dim)")
-					if window.reset then
-						add(NBSP .. NBSP .. unbroken(window.reset :: string), "var(--ou-soft)")
+				add(s, color)
+				started = true
+				return at
+			end
+			if w == 1 and group.label ~= "" and on.provider and not (short and first) then
+				put(group.label, accent)
+			end
+			if account and not (short and first) then
+				put(unbroken(account :: string), accent, 1)
+			end
+			local plan = if on.plan and not short and (w == 1 or account ~= nil) then plan_in(group.details, account) else nil
+			local pill: Pill? = nil
+			if plan then
+				local at = put(NBSP .. unbroken(plan :: string) .. NBSP, PLAN_A, 1)
+				pill = { at = at, glyphs = line.glyphs - at, ends = 0, row = 0, dim = if dim then true else nil }
+			end
+			local bar: Bar? = nil
+			local label = unbroken(string.upper(window.bare or window.label))
+			if window.passed then
+				if on.window then
+					put(label, "var(--ou-lbl)")
+					own = true
+				end
+				put("reset", "var(--ou-soft)")
+				own = true
+				if first then
+					line.need = line.glyphs
+				end
+			else
+				if on.bar and style == "ring" and not short then
+					put(dial(share), b)
+					own = true
+				end
+				if on.window then
+					put(label, "var(--ou-lbl)")
+					own = true
+				end
+				if on.bar and not short and (style == "instrument" or style == "blocks") then
+					local text, filled = bar_text(style, bar_glyphs, share, share > 0 or window.under == true)
+					local at = put(text)
+					own = true
+					bar = {
+						at = at,
+						glyphs = bar_glyphs,
+						fill = filled,
+						ends = 0, -- set below, once its saved resets are on
+						key = group.key .. "/" .. window.label,
+						a = a,
+						b = b,
+						row = 0,
+						boxed = false,
+						dim = if dim then true else nil,
+					}
+				end
+				if on.share then
+					put(share_label(model, window), "var(--ou-num-" .. tone .. ")")
+					own = true
+					if not brief and (style ~= "compact" or model.used) then
+						add(NBSP .. share_word(model), "var(--ou-dim)")
+					end
+					if first then
+						line.need = line.glyphs
 					end
 				end
-				local a, b = window_colors(tone, g)
-				table.insert(line.bars, {
-					at = at,
-					glyphs = bar_glyphs,
-					fill = math.clamp(window.pct, 0, 100) / 100 * bar_glyphs,
-					ends = 0, -- set below, once its saved resets are on
-					key = group.key .. "/" .. window.label,
-					a = a,
-					b = b,
-					dim = if dim then true else nil,
-				})
-			end
-			if window.saved then
-				local fable = is_fable(group.id, window.label)
-				local saved = "+" .. tostring(window.saved) .. (if fable then "F" else "")
-				if window.expires then
-					saved ..= if several then "!" else NBSP .. "exp" .. NBSP .. unbroken(window.expires :: string)
+				if on.reset and not brief and window.reset then
+					put(unbroken(window.reset :: string), "var(--ou-soft)", 2)
 				end
-				add((if several then NBSP else NBSP .. NBSP) .. saved, if window.expires then "var(--ou-num-warn)" else group_color(g, "a"))
 			end
-			if not window.passed then
-				line.bars[#line.bars].ends = line.glyphs
+			if on.saved and window.saved then
+				local saved = saved_text(group.id, window)
+				if window.expires then
+					saved ..= if brief then "!" else NBSP .. "exp" .. NBSP .. unbroken(window.expires :: string)
+				end
+				put(saved, if window.expires then "var(--ou-num-warn)" else accent, if brief then 1 else 2)
+			end
+			if pill then
+				pill.ends = if lead then pill.at + pill.glyphs else line.glyphs
+				table.insert(line.pills, pill :: Pill)
+			end
+			if bar then
+				bar.ends = if lead then bar.at + bar.glyphs else line.glyphs
+				table.insert(line.bars, bar :: Bar)
 			end
 		end
 	end
 	dim = false
-	for _, other in model.others do
+	for _, other in others_on(model, on) do
 		next_part()
 		add(unbroken(other), "var(--ou-soft)")
 	end
+	for i, mark in marks do
+		mark.ends = if marks[i + 1] then marks[i + 1].at else line.glyphs
+	end
+	line.marks = if #marks > 0 then marks else nil
 	line.text = table.concat(parts)
 	return line
 end
 
--- The text's paint: each part's color over its glyphs; each bar from its first color, faint, to its second up to
--- its share, then the track. Hard stops sit between glyphs, so nothing bleeds.
-local function line_paint(line: Line): string
+-- The line for Display's Position: a stacked one (`stack_of`), or a single line, with its narrow copy where a pane
+-- could be too narrow for its first window's share (`plain`: without, for the settings panel's preview). The copy
+-- shows in a box under the width that share needs, so it ends with the last window that could fit there: nothing
+-- after it could ever show, and in the hover's copy (two rows in one box, see `line_css`) it must stay one row
+-- while the line shows.
+local function line_of(model: Model, settings: Settings, plain: boolean?): Line
+	if settings.place == "stack" then
+		return stack_of(model, settings)
+	end
+	local line = single_line(model, settings, false)
+	if plain or line.need == nil then
+		return line
+	end
+	local short = single_line(model, settings, true)
+	local under = fit_px(line, line.need :: number)
+	local kept: { { at: number, ends: number } } = {}
+	local keep = short.glyphs
+	for _, mark in (short.marks or {}) :: { { at: number, ends: number } } do
+		table.insert(kept, mark)
+		if mark.ends * GLYPH + DOTS_PX >= under then
+			keep = mark.at
+			break
+		end
+	end
+	-- (a copy whose first window needs the room the line's does is no help)
+	if (if #kept > 0 then kept[1].at else short.glyphs) * GLYPH + DOTS_PX >= under then
+		return line
+	end
+	if keep < short.glyphs then
+		short.text = string.sub(short.text, 1, (utf8.offset(short.text, keep + 1) :: number) - 1)
+		short.glyphs = keep
+		local paints: { Paint } = {}
+		for _, paint in short.paints do
+			if paint.from < keep then
+				table.insert(paints, paint)
+			end
+		end
+		short.paints = paints
+	end
+	short.marks = if #kept > 0 then kept else nil
+	short.to = under
+	line.from = under
+	line.short = short
+	return line
+end
+
+-- A single line's paint as gradient stops: each part's color over its glyphs; each bar from its first color, faint,
+-- to its second up to its share, then the track. Hard stops sit between glyphs, so nothing bleeds. `shift`: how
+-- many glyphs further along the image they go.
+local function paint_stops(line: Line, shift: number): { string }
 	local items: { { at: number, stops: string } } = {}
 	for _, paint in line.paints do
 		table.insert(items, {
 			at = paint.from,
-			stops = string.format("%s %s %s", if paint.dim then faded(paint.color, 45) else solid(paint.color), em(paint.from), em(paint.to)),
+			stops = string.format("%s %s %s", if paint.dim then faded(paint.color, 45) else solid(paint.color), em(paint.from + shift), em(paint.to + shift)),
 		})
 	end
 	for _, bar in line.bars do
-		local tip = bar.at + bar.fill
+		local tip = bar.at + bar.fill + shift
 		local stops: { string } = {}
 		if bar.fill > 0 then
-			table.insert(stops, string.format("%s %s", faded(bar.a, if bar.dim then 20 else 40), em(bar.at)))
+			table.insert(stops, string.format("%s %s", faded(bar.a, if bar.dim then 20 else 40), em(bar.at + shift)))
 			table.insert(stops, string.format("%s %s", if bar.dim then faded(bar.b, 45) else solid(bar.b), em(tip)))
 		end
 		if bar.fill < bar.glyphs then
 			-- the track is already faint, and its color carries its own alpha: a dim bar keeps it as it is
-			table.insert(stops, string.format("%s %s %s", solid("var(--ou-track)"), em(tip), em(bar.at + bar.glyphs)))
+			table.insert(stops, string.format("%s %s %s", solid("var(--ou-track)"), em(tip), em(bar.at + bar.glyphs + shift)))
 		end
 		table.insert(items, { at = bar.at, stops = table.concat(stops, ", ") })
 	end
@@ -269,13 +712,65 @@ local function line_paint(line: Line): string
 	for _, item in items do
 		table.insert(stops, item.stops)
 	end
-	return "linear-gradient(90deg, " .. table.concat(stops, ", ") .. ")"
+	return stops
 end
 
--- `size` while the bar's window fits on the line of the box drawing it, else 0, so a window that wrapped away
--- takes its tip along (in background sizes, 100% is that box's width).
-local function fits(bar: Bar, size: number): string
-	return string.format("clamp(0px, calc((100%% - %spx) * 1000), %spx)", num(bar.ends * GLYPH - 3), num(size))
+-- The text's paint: a single line's stops, or a stacked line's rows, which take a color each, top to bottom. `none`
+-- for a stacked line with nothing on it.
+local function line_paint(line: Line): string
+	if line.rows then
+		local stops: { string } = {}
+		for r, row in line.rows :: { StackRow } do
+			table.insert(stops, string.format("%s %spx %spx", if row.dim then faded(row.color, 45) else solid(row.color), num((r - 1) * LINE_ROW), num(r * LINE_ROW)))
+		end
+		return if #stops > 0 then "linear-gradient(180deg, " .. table.concat(stops, ", ") .. ")" else "none"
+	end
+	return "linear-gradient(90deg, " .. table.concat(paint_stops(line, 0), ", ") .. ")"
+end
+
+-- What a single line shows depends on how wide its box is, and a sheet can only say that in lengths: in a
+-- background's size 100% is the box's width, so `clamp(0px, (100% - N) * 1000, size)` is `size` in a box at least N
+-- wide and nothing in a narrower one. EDGE keeps a box exactly N wide on the wide side.
+-- `size` px while the box is at least `from` px wide and under `to` px (either may be nil), else 0.
+local function within(from: number?, to: number?, size: number): string
+	local px = num(size) .. "px"
+	local parts: { string } = {}
+	if from then
+		table.insert(parts, string.format("clamp(0px, calc((100%% - %spx) * 1000), %s)", num((from :: number) - EDGE), px))
+	end
+	if to then
+		table.insert(parts, string.format("clamp(0px, calc((%spx - 100%%) * 1000), %s)", num((to :: number) - EDGE), px))
+	end
+	return if #parts == 0 then px elseif #parts == 1 then parts[1] else "min(" .. parts[1] .. ", " .. parts[2] .. ")"
+end
+
+-- The width of a text's paint: all of it between those widths, none outside them.
+local function wide_while(from: number?, to: number?): string
+	if from then
+		return string.format("clamp(0px, calc((100%% - %spx) * 1000000), 100000px)", num((from :: number) - EDGE))
+	end
+	return string.format("clamp(0px, calc((%spx - 100%%) * 1000000), 100000px)", num((to :: number) - EDGE))
+end
+
+-- The room a single line keeps free at its end, as a padding: DOTS_PX while its box (`box`, its width as a
+-- length; a padding's percentage is of the containing block's width, the meter's or the target's) is too narrow
+-- for all of it, where three dots then say that windows are missing (`statics`).
+local function reserve(line: Line, box: string): string
+	return string.format("clamp(0px, calc((%spx - %s) * 1000), %spx)", num(line.glyphs * GLYPH - 0.5), box, num(DOTS_PX))
+end
+
+-- `size` while what ends at glyph `ends` of `line` is on the row of the box drawing it, and the box shows that
+-- line (not its narrow copy, or the other way round), else 0: so a window that wrapped away takes its tip and pill
+-- along. A stacked line doesn't wrap (`ends` 0).
+local function fits(line: Line, ends: number, size: number): string
+	if ends == 0 then
+		return num(size) .. "px"
+	end
+	local from = fit_px(line, ends)
+	if line.from then
+		from = math.max(from, line.from :: number)
+	end
+	return within(from, line.to, size)
 end
 
 local function tip_image(color: string, strength: number): string
@@ -294,16 +789,105 @@ end
 
 type Layers = { images: { string }, positions: { string }, sizes: { string } }
 
--- Each bar's lit tip, where its window stands.
-local function tips(line: Line, strength: number): Layers
-	local layers: Layers = { images = {}, positions = {}, sizes = {} }
+local function layer(layers: Layers, image: string, x: number, y: number, w: string, h: number)
+	table.insert(layers.images, image)
+	table.insert(layers.positions, string.format("%spx %spx", num(x), num(y)))
+	table.insert(layers.sizes, string.format("%s %spx", w, num(h)))
+end
+
+-- What the tips' layer draws that doesn't move: each plan's pill (a gold ring, faintly filled, around its text)
+-- and a stacked line's boxed bars (the share in the bar's colors over the track). The comets keep them. Old
+-- numbers' are faint, as their text is. `dy`: how far down the box the line's row is; `into`: layers to add to.
+local function statics(line: Line, dy: number, into: Layers?): Layers
+	local layers: Layers = into or { images = {}, positions = {}, sizes = {} }
+	-- Where a single line may wrap: three dots after what still fits, while what follows doesn't and has wrapped
+	-- onto the row that is cut off. Else nothing shows that windows are missing in a narrow pane. They sit in the
+	-- room the line keeps for them (`reserve`), so they show at any width.
+	local dot, gap = solid("var(--ou-soft)"), faded("var(--ou-soft)", 0)
+	local dots = string.format("linear-gradient(90deg, %s 0px 2px, %s 2px 3px, %s 3px 5px, %s 5px 6px, %s 6px 8px)", dot, gap, dot, gap, dot)
+	for _, mark in (line.marks or {}) :: { { at: number, ends: number } } do
+		local from, to = fit_px(line, mark.at), fit_px(line, mark.ends)
+		if line.from then
+			from = math.max(from, line.from :: number)
+		end
+		if line.to then
+			to = math.min(to, line.to :: number)
+		end
+		if from < to then
+			layer(layers, dots, mark.at * GLYPH + 2, 9 + dy, within(from, to, 8), 2)
+		end
+	end
+	for _, pill in line.pills do
+		local x, y = pill.at * GLYPH, pill.row * LINE_ROW + 0.5 + dy
+		local w, h, r = pill.glyphs * GLYPH, 12, 6
+		local rim, body = if pill.dim then 36 else 80, if pill.dim then 10 else 22
+		local edge = string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, rim), faded(PLAN_B, rim))
+		layer(layers, edge, x + r, y, fits(line, pill.ends, w - 2 * r), 1)
+		layer(layers, edge, x + r, y + h - 1, fits(line, pill.ends, w - 2 * r), 1)
+		for _, cap in { { color = PLAN_A, side = "100%", x = x }, { color = PLAN_B, side = "0%", x = x + w - r } } do
+			layer(
+				layers,
+				string.format(
+					"radial-gradient(%spx %spx at %s 50%%, %s 0%%, %s 80%%, %s 88%%, %s 96%%, %s 100%%)",
+					num(r), num(r), cap.side,
+					faded(cap.color, body), faded(cap.color, body), faded(cap.color, rim), faded(cap.color, rim), faded(cap.color, 0)
+				),
+				cap.x, y, fits(line, pill.ends, r), h
+			)
+		end
+		layer(layers, string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, body), faded(PLAN_B, body)), x + r, y, fits(line, pill.ends, w - 2 * r), h)
+	end
 	for _, bar in line.bars do
-		local x = (bar.at + bar.fill) * GLYPH
-		table.insert(layers.images, tip_image(bar.b, if bar.dim then math.floor(strength / 2) else strength))
-		table.insert(layers.positions, string.format("%spx %spx", num(x - TIP_W / 2), num(BAR_Y - TIP_H / 2)))
-		table.insert(layers.sizes, string.format("%s %spx", fits(bar, TIP_W), num(TIP_H)))
+		if bar.boxed then
+			local x, y = bar.at * GLYPH, bar.row * LINE_ROW + BAR_Y - 1 + dy
+			if bar.fill > 0 then
+				layer(
+					layers,
+					string.format("linear-gradient(90deg, %s, %s)", faded(bar.a, if bar.dim then 20 else 40), if bar.dim then faded(bar.b, 45) else solid(bar.b)),
+					x, y, num(bar.fill * GLYPH) .. "px", 2
+				)
+			end
+			layer(layers, string.format("linear-gradient(%s, %s)", solid("var(--ou-track)"), solid("var(--ou-track)")), x, y, num(bar.glyphs * GLYPH) .. "px", 2)
+		end
 	end
 	return layers
+end
+
+-- The tips' layer of a line: its narrow copy's dots, what doesn't move, and (`strength`: at rest and hovered, not
+-- while comets run) each bar's lit tip where its window stands. `text`: first, the narrow copy's paint, for the
+-- box whose text that copy is (the meter's `::after`); the hover's copy paints both in one image (`line_css`).
+local function decor(line: Line, strength: number?, dy: number, text: boolean): Layers
+	local layers: Layers = { images = {}, positions = {}, sizes = {} }
+	local short = line.short
+	if short then
+		if text then
+			layer(layers, line_paint(short :: Line), 0, 0, wide_while(nil, (short :: Line).to), 13)
+		end
+		statics(short :: Line, dy, layers)
+	end
+	statics(line, dy, layers)
+	if strength then
+		for _, bar in line.bars do
+			local x = (bar.at + bar.fill) * GLYPH
+			layer(
+				layers,
+				tip_image(bar.b, if bar.dim then math.floor((strength :: number) / 2) else strength :: number),
+				x - TIP_W / 2, bar.row * LINE_ROW + BAR_Y - TIP_H / 2 + dy, fits(line, bar.ends, TIP_W), TIP_H
+			)
+		end
+	end
+	return layers
+end
+
+-- The tips' layer at rest: what doesn't move, and each bar's lit tip where its window stands (the settings panel's
+-- preview draws it for a line without a narrow copy).
+local function tips(line: Line, strength: number): Layers
+	return decor(line, strength, 0, false)
+end
+
+-- What the tips' layer keeps while a change's comets run over it.
+local function rest_layers(line: Line): Layers
+	return decor(line, nil, 0, true)
 end
 
 -- The hover target (see the header), laid over the usage line: the composer's chips row while it's empty, or the
@@ -328,18 +912,21 @@ local SPINE_SIDE =
 -- queue and the composer, so the match is by place: within the 9 blocks after the first, and never the slot (whose
 -- row has its role, or Tern's dotted form), the tray or the last block (in omp 19.2, the composer's). It can't go by
 -- the blocks around them: Tern doesn't restyle an element when one before it changes, so a `+` chain on a block that
--- comes and goes is matched late, if at all.
+-- comes and goes is matched late, if at all. `docks`: the docks to match them in (`.sf-dock` and what narrows it).
 local BLOCKS_ABOVE_SLOT = 9
-local function other_above(): string
+local function other_above(docks: { string }): string
 	local selectors: { string } = {}
-	for before = 0, BLOCKS_ABOVE_SLOT - 1 do
-		table.insert(
-			selectors,
-			".sf-dock:not(.sf-chat-spine) > :first-child + "
-				.. string.rep("* + ", before)
-				.. ":not(.sf-void):not(.sf-hidden):not(.sf-tray):not(.sf-tray-dotted)"
-				.. ":not([data-role='omp.hud.activity']):not(:last-child)"
-		)
+	for _, dock in docks do
+		for before = 0, BLOCKS_ABOVE_SLOT - 1 do
+			table.insert(
+				selectors,
+				dock
+					.. " > :first-child + "
+					.. string.rep("* + ", before)
+					.. ":not(.sf-void):not(.sf-hidden):not(.sf-tray):not(.sf-tray-dotted)"
+					.. ":not([data-role='omp.hud.activity']):not(:last-child)"
+			)
+		end
 	end
 	return table.concat(selectors, ",\n")
 end
@@ -396,40 +983,24 @@ end
 -- the target's box is the capsule, its `::before` the bright copy, glyph for glyph over the line, and its
 -- `::after` the card.
 local LINE_CSS = [==[
-/* room above the hairline for the usage line, clear of the working row (in spine, under it: see below); every agent
-   pane, so focus never shifts it */
-.sf-dock .sf-col[data-role^='omp.editor'] {
-	margin-top: 15px;
-}
-/* Tern's agents and jobs tray lifts the meter (and the line on it) above itself, right under the working row: the
-   same room again, above the tray */
-.sf-dock.sf-tray-ctx > .sf-col.sf-tray {
-	margin-top: 15px;
-}
-.sf-dock.sf-tray-ctx > .sf-col.sf-tray.under {
-	margin-top: 19px;
-}
-/* anything else right above the line (a progress row, a widget, a panel) would sit flush on it, not 26px tall with
-   its text in the middle as the working row is: it keeps 12px below itself, so it clears the line and its capsule
-   (not in Spine, where the line is under the hairline) */
-$OTHER_ABOVE {
-	margin-bottom: 12px;
-}
+$ROOM
 /* the providers' colors */
 $PALETTE
-/* the line: 10px mono in a 13px box whose second line (where a window that doesn't fit wraps) is cut off; one
-   static gradient clipped to the text colors its parts and fills its bars */
+/* the line: 10px mono in a box as tall as its rows, one but for Stacked (one row's box is 13px, its second line,
+   where a window that doesn't fit wraps, cut off); one static gradient clipped to the text colors its parts and
+   fills its bars */
 $METER::before,
 $HOST::before {
 	content: $CONTENT;
-	height: 13px;
+	height: $HEIGHT;
 	overflow: hidden;
-	white-space: pre-wrap;
+	white-space: $WRAP;
 	text-overflow: ellipsis;
 	font: 500 10px/15px var(--mono);
 	font-variant-numeric: tabular-nums;
 	color: transparent;
 	background-image: $PAINT;
+	background-size: $PAINT_SIZE;
 	background-repeat: no-repeat;
 	background-clip: text;
 	pointer-events: none;
@@ -445,35 +1016,9 @@ $HOST::before {
 /* the text is the focused agent's, so it shows on the focused pane only */
 $METER::before {
 	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: 100%;
-	margin-bottom: 2px;
 }
 $TIPS_CSS
-/* Spine lays the meter across the whole dock, from its left edge, with the working row right above it, and insets
-   the composer's column by its `--sp-side`: there the line goes under the hairline instead, on the column, in the
-   room the margin above leaves between the hairline and the input. Its tips and comets (`::after`) go with it.
-   `--sp-side` takes half the width of the box it's used in, and the meter is 16px narrower than the column's box
-   (`right: 16px`), so here it is Tern's formula over that box's width. */
-$METER_SPINE::before,
-$METER_SPINE::after {
-	left: $SPINE_SIDE;
-	right: calc($SPINE_SIDE - 16px);
-	top: calc(100% + 4px);
-	bottom: auto;
-	margin-bottom: 0;
-}
-/* except over the tray, where Tern lifts the meter onto the tray's sides in every chat style: the line rides above
-   it, as in the other styles */
-$METER_TRAY::before,
-$METER_TRAY::after {
-	left: 0;
-	right: 0;
-	top: auto;
-	bottom: 100%;
-	margin-bottom: 2px;
-}
+$GEOMETRY
 /* with attachments the target is the first chip's end slot: the row doesn't clip it, and the chip isn't its
    containing block, so it is placed from the composer, as the empty row is */
 $CHIPS {
@@ -482,16 +1027,12 @@ $CHIPS {
 $CHIPS > .sf-card:first-child {
 	position: static;
 }
-/* the hover target over the line: the meter's place in each chat style, widened by the capsule's 6px pad, as
-   long as the line (or the meter, if that's shorter). At rest it sits under the line, as its backdrop (see
-   below); hovered, over it */
+/* the hover target over the line (placed above), widened by the capsule's 6px pad. At rest it sits under the
+   line, as its backdrop (see below); hovered, over it */
 $HOST {
 	display: block !important;
 	position: absolute;
-	left: 12px;
-	top: -28px;
-	width: min($WIDTH, calc(100% - 24px));
-	height: 15px;
+	height: $HOST_HEIGHT;
 	min-height: 0;
 	margin: 0;
 	padding: 0;
@@ -506,26 +1047,6 @@ $HOST {
 		background-color 0.2s var(--ease),
 		box-shadow 0.2s var(--ease);
 }
-$HOST_READER {
-	left: 16px;
-	width: min($WIDTH, calc(100% - 32px));
-}
-$HOST_SPINE {
-	left: calc(var(--sp-side) - 6px);
-	top: 5px;
-	width: min($WIDTH, calc(100% - 2 * var(--sp-side) + 12px));
-}
-$HOST_CONSOLE {
-	left: calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px);
-	width: min($WIDTH, calc(min(100%, 1040px) - var(--cn-gut) + 12px));
-}
-/* over the tray, the target follows the meter Tern lifts above it: else it would sit on the tray's cards, taking
-   their hover and clicks */
-$HOST_TRAY {
-	left: calc(var(--sf-tray-ctx-l, 22px) - 6px);
-	top: calc(-28px - var(--sf-tray-lift, 0px));
-	width: min($WIDTH, calc(100% - var(--sf-tray-ctx-l, 22px) - var(--sf-tray-ctx-r, 22px) + 12px));
-}
 $BACKDROP
 /* hovered, the line lifts into a glass capsule, ringed in its provider's color (or the lowest window's tone) */
 $HOST:hover {
@@ -538,13 +1059,13 @@ $HOST:hover {
 }
 /* and comes up to full strength: the copy fades in over it, the capsule hiding the line beneath */
 $HOST::before {
-	position: absolute;
+	position: absolute;$HOVER_BOX
 	left: 6px;
 	right: 6px;
-	top: 1px;
-	background-image: $PAINT$HOVER_IMAGES;
-	background-position: 0 0$HOVER_POSITIONS;
-	background-size: auto$HOVER_SIZES;
+	top: $COPY_TOP;
+	background-image: $HOVER_PAINT$HOVER_IMAGES;
+	background-position: $HOVER_PAINT_AT$HOVER_POSITIONS;
+	background-size: $HOVER_PAINT_SIZE$HOVER_SIZES;
 	background-clip: text$HOVER_CLIPS;
 	opacity: 0;
 	transition: opacity 0.2s var(--ease);
@@ -560,36 +1081,379 @@ $HOST:hover::before {
 }
 ]==]
 
--- The tips at rest, on the meter's `::after`, which a change's comets take over (pulse_css).
+-- Where the line sits, above the hairline or under it (Display's Position): the line and its tips' layer on the
+-- meter, and the hover target over the line, the meter's place in each chat style, as long as the line (or the
+-- meter, if that's shorter). A line longer than its box keeps DOTS_PX free at its end (`reserve`), where three
+-- dots say so.
+local ROW_CSS = [==[
+/* the line's place on the meter */
+$METER::before,
+$METER::after {
+	left: 0;
+	right: 0;
+	$LINE_Y
+}
+/* a line too wide for its pane keeps room at its end for the dots that say so */
+$METER::before {
+	padding-right: $RESERVE;
+}
+/* Spine lays the meter across the whole dock, from its left edge, with the working row right above it, and insets
+   the composer's column by its `--sp-side`: there the line goes under the hairline, on the column, in the room the
+   margin above leaves between the hairline and the input. Its tips and comets (`::after`) go with it.
+   `--sp-side` takes half the width of the box it's used in, and the meter is 16px narrower than the column's box
+   (`right: 16px`), so here it is Tern's formula over that box's width. */
+$METER_SPINE::before,
+$METER_SPINE::after {
+	left: $SPINE_SIDE;
+	right: calc($SPINE_SIDE - 16px);
+	top: calc(100% + 4px);
+	bottom: auto;
+	margin-bottom: 0;
+}
+$METER_SPINE::before {
+	padding-right: $RESERVE_SPINE;
+}
+/* over the tray, Tern lifts the meter onto the tray's sides, right under the working row, in every chat style: the
+   line goes with it, above it or under it as in the other styles */
+$METER_TRAY::before,
+$METER_TRAY::after {
+	left: 0;
+	right: 0;
+	$LINE_Y
+}
+$METER_TRAY::before {
+	padding-right: $RESERVE;
+}
+$HOST {
+	left: 12px;
+	top: $HOST_TOP;
+	width: $WIDTH;
+}
+$HOST_READER {
+	left: 16px;
+	width: $WIDTH_READER;
+}
+/* Spine's composer column isn't a stacking context of its own, so a target under it (-1) would lie behind the
+   column's box and never take the pointer: at rest it sits level with it, still under the line (the meter's) */
+$HOST_SPINE {
+	left: calc(var(--sp-side) - 6px);
+	top: 5px;
+	width: $WIDTH_SPINE;
+	z-index: 0;
+}
+$HOST_CONSOLE {
+	left: calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px);
+	width: $WIDTH_CONSOLE;
+}
+/* over the tray, the target follows the meter Tern lifts above it: else it would sit on the tray's cards, taking
+   their hover and clicks */
+$HOST_TRAY {
+	left: calc(var(--sf-tray-ctx-l, 22px) - 6px);
+	top: calc($TRAY_TOP - var(--sf-tray-lift, 0px));
+	width: $WIDTH_TRAY;
+}]==]
+
+-- Stacked: the block of rows over the meter's right (or left) end, in every chat style (Spine's too), as wide as
+-- its longest row, or as the meter where that is narrower (a narrow pane cuts the rows' ends off); the target over
+-- it, its edge as far in from the composer's as the meter's widest copy of the line ends (Spine's `--sp-side`,
+-- Console's gutter, the tray's sides).
+local STACK_CSS = [==[
+/* the block's place on the meter */
+$METER::before,
+$METER::after {
+	$METER_SIDE
+	width: $LINE_WIDTH;
+	max-width: 100%;
+	top: auto;
+	bottom: 100%;
+	margin-bottom: $LIFT;
+}
+$METER_SPINE::before,
+$METER_SPINE::after {
+	$SPINE_METER_SIDE
+	max-width: calc(100% + 16px - 2 * $SPINE_SIDE);
+}
+$METER_TRAY::before,
+$METER_TRAY::after {
+	$METER_SIDE
+	max-width: 100%;
+}
+$HOST {
+	$HOST_SIDE
+	top: $HOST_TOP;
+	width: $WIDTH;
+}
+$HOST_READER {
+	$READER_SIDE
+	width: $WIDTH_READER;
+}
+$HOST_SPINE {
+	$SPINE_HOST_SIDE
+	top: $HOST_TOP;
+	width: $WIDTH_SPINE;
+}
+$HOST_CONSOLE {
+	$CONSOLE_SIDE
+	width: $WIDTH_CONSOLE;
+}
+$HOST_TRAY {
+	$TRAY_SIDE
+	top: calc($HOST_TOP - var(--sf-tray-lift, 0px));
+	width: $WIDTH_TRAY;
+}]==]
+
+-- The tips at rest, on the meter's `::after`, which a change's comets take over (pulse_css); it carries its own
+-- track color (the plans' pills and a stacked line's bars use it), as its `::before` does.
+-- A stacked line's faint repeats (`ghosts`) are this layer's text, row for row over the blanks the line leaves them.
+-- A single line's narrow copy (`short`) is its text too, painted as the line is, in its place while the pane is too
+-- narrow for the line's first window (SHORT_TIPS).
 local TIPS_CSS = [==[
 /* each bar's lit tip, where its window stands */
 $METER::after {
-	content: "";
+	content: $TEXT;
+	overflow: hidden;
+	white-space: $WRAP;
+	font: 500 10px/15px var(--mono);
+	color: $COLOR;
 	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: 100%;
-	margin-bottom: 2px;
-	height: 13px;
+	height: $HEIGHT;
 	background-image: $IMAGES;
 	background-position: $POSITIONS;
 	background-size: $SIZES;
-	background-repeat: no-repeat;
+	background-repeat: no-repeat;$SHORT
 	pointer-events: none;
+	--ou-track: color-mix(in srgb, var(--t1) 13%, transparent);
+	--ou-soft: var(--t3);
 }]==]
 
+local SHORT_TIPS = [==[
+
+	font-variant-numeric: tabular-nums;
+	padding-right: $DOTS;
+	background-clip: $CLIPS;
+	--ou-lbl: var(--t3);
+	--ou-sep: var(--t4);
+	--ou-num-ok: var(--t2);
+	--ou-num-warn: var(--warn);
+	--ou-num-bad: var(--bad);
+	--ou-dim: var(--t4);]==]
+
 -- The line's backdrop at rest, by the Line background setting (see data.luau's BACKDROPS): the target under the
--- line, frosted or opaque in the card's glass, or nothing.
+-- line as Liquid Glass, opaque in the card's glass, or nothing.
 local BACKDROP_CSS: { [string]: string } = {
-	glass = "$HOST {\n\tbackground-color: light-dark(rgb(from var(--card) r g b / 62%), rgb(from var(--pop-bg) r g b / 62%));\n\tbackdrop-filter: blur(10px) saturate(160%);\n}",
+	-- Liquid Glass: a faint tint the chat shows through, softened rather than blurred away (a light blur, more
+	-- saturation), a sheen falling from the top edge and the top-left corner, a lit rim above and a shaded one below.
+	-- Each color is a relative one: Tern drops a gradient stop that is a bare `light-dark()`.
+	glass = [==[
+$HOST {
+	background-color: light-dark(rgb(from var(--card) r g b / 30%), rgb(from var(--pop-bg) r g b / 22%));
+	background-image:
+		linear-gradient(180deg, rgb(from light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 10%)) r g b / alpha), rgb(255 255 255 / 0%) 60%),
+		radial-gradient(90% 160% at 0% 0%, rgb(from light-dark(rgb(255 255 255 / 40%), rgb(255 255 255 / 8%)) r g b / alpha), rgb(255 255 255 / 0%) 70%);
+	backdrop-filter: blur(2.5px) saturate(180%);
+	box-shadow:
+		0 0 0 1px light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 9%)),
+		inset 0 1px 0 light-dark(rgb(255 255 255 / 85%), rgb(255 255 255 / 20%)),
+		inset 0 -1px 0 light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 30%)),
+		0 6px 16px -10px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 60%));
+}
+/* hovered, the opaque capsule as with any background: no sheen, nothing behind to soften */
+$HOST:hover {
+	background-image: none;
+	backdrop-filter: none;
+}]==],
 	solid = "$HOST {\n\tbackground-color: var(--ou-glass);\n}",
 	clear = "",
 }
 
-local function line_css(line: Line, model: Model, settings: Settings): string
+-- The line's box height in px: a row's 13px, or a stacked line's rows 15px apart.
+local function line_height(line: Line): number
+	return if line.rows then math.max(1, #(line.rows :: { StackRow })) * LINE_ROW - 2 else 13
+end
+
+-- A stacked line's faint repeats as a `content` string, a row a line (`""` without any).
+local function ghost_content(line: Line): string
+	if line.ghosts == nil then
+		return '""'
+	end
+	local rows: { string } = {}
+	for _, ghost in line.ghosts :: { string } do
+		table.insert(rows, string.sub(css_string(ghost), 2, -2))
+	end
+	return '"' .. table.concat(rows, "\\A ") .. '"'
+end
+
+-- The line as a `content` string: a stacked line's rows broken with `\A`; `hover`: with its repeats in.
+local function line_content(line: Line, hover: boolean?): string
+	if line.rows == nil then
+		return css_string(line.text)
+	end
+	local rows: { string } = {}
+	for i, row in line.rows :: { StackRow } do
+		local text = if hover and line.hovered then (line.hovered :: { string })[i] else row.text
+		table.insert(rows, string.sub(css_string(text), 2, -2))
+	end
+	return '"' .. table.concat(rows, "\\A ") .. '"'
+end
+
+-- The room the line takes, in every agent pane, so focus never shifts a composer (the docks are matched by what
+-- they are, not by the line's pane).
+-- Above the hairline (Display's Above the bar, and Stacked): ROOM_PX over the composer, clear of the working row,
+-- and the same above Tern's agents and jobs tray, which lifts the meter (and the line on it) above itself, right
+-- under the working row. Anything else right above the line (a progress row, a widget, a panel: `other_above`)
+-- would sit flush on it, not 26px tall with its text in the middle as the working row is: it keeps 12px below
+-- itself, so it clears the line and its capsule. In Spine that room lies between the hairline and the input, and the
+-- line goes there (see ROW_CSS), so nothing above needs to clear it.
+-- Under it (Under the bar): Spine as above; elsewhere the input moves down a line instead: the composer's padding
+-- above it, UNDER_PX more than each of Tern's own rules gives it (UNDER_PADS). Over the tray the meter is lifted
+-- above the tray's cards, and the line stays under it: the tray's cards move down a line (its padding), so the line
+-- sits between the meter and them.
+-- Stacked: a block of rows is taller than that room, and reaches up over the chat. What omp shows right above the
+-- composer (the working row too) keeps clear of all of it: the rows past the first, and in Spine, which has no room
+-- above its hairline, the first as well.
+local EDITOR = ".sf-col[data-role^='omp.editor']"
+local WORKING = " > .sf-row[data-role='omp.hud.activity']"
+-- Tern's padding above the input by dock (any chat style, Reader, Reader's opening composer, a folded composer),
+-- later ones winning; Console has none, and its input's box starts right at the hairline, so it gets the line's
+-- whole height.
+local UNDER_PX = 14
+local UNDER_PADS: { { dock: string, px: number } } = {
+	{ dock = "", px = 11 },
+	{ dock = ".sf-chat-reader", px = 14 },
+	{ dock = ".sf-chat-reader.sf-fresh", px = 18 },
+	{ dock = ".sf-chat-console", px = 8 },
+	{ dock = ".sf-folded", px = 6 },
+}
+local function room_css(line: Line, settings: Settings): string
+	local rules: { string } = {}
+	local function rule(selectors: { string }, body: string)
+		table.insert(rules, table.concat(selectors, ",\n") .. " {\n\t" .. body .. "\n}")
+	end
+	local room = "margin-top: " .. num(ROOM_PX) .. "px;"
+	if settings.place == "below" then
+		-- 2px more than the line's room: the capsule's rim clear of the first card
+		rule({ ".sf-dock.sf-tray-ctx > .sf-col.sf-tray" }, "padding-top: " .. num(ROOM_PX + 2) .. "px;")
+		rule({ ".sf-dock.sf-chat-spine:not(.sf-tray-ctx) " .. EDITOR }, room)
+	else
+		rule({ ".sf-dock.sf-tray-ctx > .sf-col.sf-tray" }, room)
+		rule({ ".sf-dock.sf-tray-ctx > .sf-col.sf-tray.under" }, "margin-top: " .. num(ROOM_PX + 4) .. "px;")
+	end
+	if settings.place == "below" then
+		-- nothing of the line is above the composer here, but the context bar's labels are: the same 12px clears them
+		rule({ other_above({ ".sf-dock:not(.sf-chat-spine)" }) }, "margin-bottom: 12px;")
+		for _, pad in UNDER_PADS do
+			rule(
+				{ ".sf-dock" .. pad.dock .. ":not(.sf-chat-spine):not(.sf-tray-ctx) " .. EDITOR },
+				"padding-top: " .. num(pad.px + UNDER_PX) .. "px;"
+			)
+		end
+	elseif settings.place == "stack" then
+		local more = line_height(line) - 13
+		local roomy = { ".sf-dock:not(.sf-chat-spine)", ".sf-dock.sf-chat-spine.sf-tray-ctx" }
+		local bare = { ".sf-dock.sf-chat-spine:not(.sf-tray-ctx)" }
+		rule({ roomy[1] .. " " .. EDITOR, ".sf-dock.sf-tray-ctx " .. EDITOR }, room)
+		rule({ other_above(roomy) }, "margin-bottom: " .. num(12 + more) .. "px;")
+		-- (1px more in Spine: the block's capsule reaches that far up)
+		rule({ other_above(bare) }, "margin-bottom: " .. num(12 + more + ROOM_PX + 1) .. "px;")
+		if more > 0 then
+			rule({ roomy[1] .. WORKING, roomy[2] .. WORKING }, "margin-bottom: " .. num(6 + more) .. "px;")
+		end
+		rule({ bare[1] .. WORKING }, "margin-bottom: " .. num(6 + more + ROOM_PX + 1) .. "px;")
+	else
+		rule({ ".sf-dock " .. EDITOR }, room)
+		rule({ other_above({ ".sf-dock:not(.sf-chat-spine)" }) }, "margin-bottom: 12px;")
+	end
+	return table.concat(rules, "\n")
+end
+
+-- Whether a target `host` px wide is narrower than its card (`card` px) even with what the card may pass it by: a
+-- short line's.
+local function hugs(host: number, card: number): boolean
+	return host + CARD_PASS < card
+end
+
+-- The hover target's width: its line's (`host` px, the capsule's pad included), or the room its pane has for it
+-- (`avail`) when that is less. The card takes its width from the target, the one box it can measure (it can't see
+-- the pane), so a line shorter than its card would hide from it that the pane is too narrow for the card: in such
+-- a pane that line's target is as wide as the room instead. The card then caps itself there (`card_css`), and
+-- tells that case from a wide pane by the target not being its line's width: so 2px come off where the room is
+-- within a px of that width.
+local function host_width(host: number, avail: string, card: number?): string
+	local w = num(host) .. "px"
+	if card == nil or not hugs(host, card :: number) then
+		return "min(" .. w .. ", " .. avail .. ")"
+	end
+	local room = num((card :: number) - CARD_PASS - EDGE) .. "px"
+	return string.format(
+		"calc(min(max(%s, clamp(0px, calc((%s - %s) * 100000), %s)), %s) - clamp(0px, calc((1px - max(%s - %s, %s - %s)) * 1000), 2px))",
+		w, room, avail, room, avail, avail, w, w, avail
+	)
+end
+
+-- The geometry for Display's Position (ROW_CSS or STACK_CSS), filled for the line's pane; `card`: its card's
+-- width in px (see `host_width`).
+local function geometry_css(line: Line, settings: Settings, card: number?): string
+	local host_px = line.glyphs * GLYPH + 12
+	local vars: { [string]: string } = {
+		METER = meter(),
+		METER_SPINE = meter(".sf-chat-spine"),
+		METER_TRAY = meter(".sf-tray-ctx"),
+		SPINE_SIDE = SPINE_SIDE,
+		HOST = host(nil),
+		HOST_READER = host(".sf-chat-reader"),
+		HOST_SPINE = host(".sf-chat-spine"),
+		HOST_CONSOLE = host(".sf-chat-console"),
+		HOST_TRAY = host(".sf-tray-ctx"),
+		WIDTH = host_width(host_px, "calc(100% - 24px)", card),
+		WIDTH_READER = host_width(host_px, "calc(100% - 32px)", card),
+		WIDTH_SPINE = host_width(host_px, "calc(100% - 2 * var(--sp-side) + 12px)", card),
+		WIDTH_CONSOLE = host_width(host_px, "calc(min(100%, 1040px) - var(--cn-gut) + 12px)", card),
+		WIDTH_TRAY = host_width(host_px, "calc(100% - var(--sf-tray-ctx-l, 22px) - var(--sf-tray-ctx-r, 22px) + 12px)", card),
+		LIFT = num(LIFT_PX) .. "px",
+	}
+	-- the target's top above the hairline: the meter 12px above the column's top, the line LIFT_PX over the meter,
+	-- `height` tall, and the target 1px above the line
+	local function above_top(height: number): string
+		return num(-(13 + LIFT_PX + height)) .. "px"
+	end
+	if settings.place ~= "stack" then
+		local below = settings.place == "below"
+		vars.LINE_Y = if below
+			then "top: calc(100% + 4px);\n\tbottom: auto;\n\tmargin-bottom: 0;"
+			else "top: auto;\n\tbottom: 100%;\n\tmargin-bottom: " .. vars.LIFT .. ";"
+		vars.HOST_TOP = if below then "5px" else above_top(line_height(line))
+		vars.TRAY_TOP = vars.HOST_TOP
+		vars.RESERVE = reserve(line, "100%")
+		vars.RESERVE_SPINE = reserve(line, "(100% - 2 * " .. SPINE_SIDE .. " + 16px)")
+		return fill(ROW_CSS, vars)
+	end
+	local right = settings.align == "right"
+	local function side(left: string, right_inset: string?): string
+		return if right then "left: auto;\n\tright: " .. (right_inset or left) .. ";" else "left: " .. left .. ";\n\tright: auto;"
+	end
+	vars.LINE_WIDTH = num(line.glyphs * GLYPH) .. "px"
+	vars.HOST_TOP = above_top(line_height(line))
+	vars.METER_SIDE = side("0")
+	vars.SPINE_METER_SIDE = side(SPINE_SIDE, "calc(" .. SPINE_SIDE .. " - 16px)")
+	vars.HOST_SIDE = side("12px")
+	vars.READER_SIDE = side("16px")
+	vars.SPINE_HOST_SIDE = side("calc(var(--sp-side) - 6px)")
+	vars.CONSOLE_SIDE = side("calc(max(0px, (100% - 1040px) / 2) + var(--cn-gut) - 12px)", "max(0px, calc((100% - 1040px) / 2))")
+	vars.TRAY_SIDE = side("calc(var(--sf-tray-ctx-l, 22px) - 6px)", "calc(var(--sf-tray-ctx-r, 22px) - 6px)")
+	return fill(STACK_CSS, vars)
+end
+
+local function text_layer_clips(layers: number): string
+	return "text" .. string.rep(", border-box", layers - 1)
+end
+
+-- `card`: the card's width in px (see `host_width`).
+local function line_css(line: Line, model: Model, settings: Settings, card: number?): string
 	local paint = line_paint(line)
-	local rest = tips(line, 55)
-	local lit = tips(line, 70)
+	local short = line.short
+	local rest = decor(line, 55, 0, true)
+	-- hovered, the copy's two rows put its layers a row down (see below)
+	local lit = decor(line, 70, if short then LINE_ROW else 0, false)
 	local function more(list: { string }): string
 		return if #list > 0 then ", " .. table.concat(list, ", ") else ""
 	end
@@ -597,31 +1461,78 @@ local function line_css(line: Line, model: Model, settings: Settings): string
 	for _ in lit.images do
 		table.insert(clips, "border-box")
 	end
+	local height = num(line_height(line)) .. "px"
+	-- hovered, the capsule hides the tips' layer and its faint repeats: the copy has them, in its rows' colors
+	local hover_box = if line.ghosts then "\n\tcontent: " .. line_content(line, true) .. ";" else ""
+	local hover_paint, hover_at, hover_size, copy_top = paint, "0 0", "auto", "1px"
+	if line.rows == nil then
+		hover_box ..= "\n\tpadding-right: " .. reserve(line, "calc(100% - 12px)") .. ";"
+	end
+	if short then
+		-- The copy is one box, and has the narrow copy too: a row above the line, each cut off as the box is one
+		-- row tall at its foot. In a pane too narrow for the line's first window the rows move down one (a padding:
+		-- its percentage is of the target's width, 12px more than the copy's), and the paint, which is one image
+		-- with the line's colors and then the narrow copy's, moves left to those (a background position's
+		-- percentage is of the box's width less the image's).
+		local s = short :: Line
+		local under = (s.to :: number) - EDGE
+		local shift = line.glyphs + 4
+		local image_px = (shift + s.glyphs + 4) * GLYPH
+		local stops = paint_stops(line, 0)
+		for _, stop in paint_stops(s, shift) do
+			table.insert(stops, stop)
+		end
+		hover_box = string.format(
+			'\n\tcontent: "%s\\A %s";\n\tbox-sizing: border-box;\n\theight: %spx;\n\tpadding-top: clamp(0px, calc((%spx - 100%%) * 1000), %spx);',
+			string.sub(css_string(s.text), 2, -2),
+			string.sub(css_string(line.text), 2, -2),
+			num(LINE_ROW + 13),
+			num(under + 12),
+			num(LINE_ROW)
+		) .. hover_box
+		hover_paint = "linear-gradient(90deg, " .. table.concat(stops, ", ") .. ")"
+		hover_at = string.format(
+			"calc(0px - clamp(0px, calc((%spx - 100%%) * 100000), %spx)) %spx",
+			num(under - image_px),
+			num(shift * GLYPH),
+			num(LINE_ROW)
+		)
+		hover_size = num(image_px) .. "px 13px"
+		copy_top = num(1 - LINE_ROW) .. "px"
+	end
 	return fill(LINE_CSS, {
 		METER = meter(),
-		METER_SPINE = meter(".sf-chat-spine"),
-		METER_TRAY = meter(".sf-tray-ctx"),
-		OTHER_ABOVE = other_above(),
-		SPINE_SIDE = SPINE_SIDE,
 		CHIPS = line_pane .. " " .. CHIPS,
+		ROOM = room_css(line, settings),
 		HOST = host(nil),
-		HOST_READER = host(".sf-chat-reader"),
-		HOST_SPINE = host(".sf-chat-spine"),
-		HOST_CONSOLE = host(".sf-chat-console"),
-		HOST_TRAY = host(".sf-tray-ctx"),
 		PALETTE = palette_css(model, settings),
 		BACKDROP = fill(BACKDROP_CSS[settings.backdrop] or "", { HOST = host(nil) }),
-		CONTENT = css_string(line.text),
+		CONTENT = line_content(line),
+		HEIGHT = height,
+		HOST_HEIGHT = num(line_height(line) + 2) .. "px",
+		WRAP = if line.rows then "pre" else "pre-wrap",
 		PAINT = paint,
-		TIPS_CSS = if #rest.images > 0
+		-- (the line gives way to its narrow copy under the width that one shows from)
+		PAINT_SIZE = if short then wide_while(line.from, nil) .. " 100%" else "auto",
+		HOVER_BOX = hover_box,
+		COPY_TOP = copy_top,
+		HOVER_PAINT = hover_paint,
+		HOVER_PAINT_AT = hover_at,
+		HOVER_PAINT_SIZE = hover_size,
+		TIPS_CSS = if #rest.images > 0 or line.ghosts
 			then fill(TIPS_CSS, {
 				METER = meter(),
-				IMAGES = table.concat(rest.images, ", "),
-				POSITIONS = table.concat(rest.positions, ", "),
-				SIZES = table.concat(rest.sizes, ", "),
+				HEIGHT = height,
+				TEXT = if short then css_string((short :: Line).text) else ghost_content(line),
+				WRAP = if short then "pre-wrap" else "pre",
+				COLOR = if short then "transparent" else "var(--t4)",
+				SHORT = if short then fill(SHORT_TIPS, { DOTS = num(DOTS_PX) .. "px", CLIPS = text_layer_clips(#rest.images) }) else "",
+				IMAGES = if #rest.images > 0 then table.concat(rest.images, ", ") else "none",
+				POSITIONS = if #rest.images > 0 then table.concat(rest.positions, ", ") else "0 0",
+				SIZES = if #rest.images > 0 then table.concat(rest.sizes, ", ") else "auto",
 			})
 			else "",
-		WIDTH = num(line.glyphs * GLYPH + 12) .. "px",
+		GEOMETRY = geometry_css(line, settings, card),
 		HOVER_IMAGES = more(lit.images),
 		HOVER_POSITIONS = more(lit.positions),
 		HOVER_SIZES = more(lit.sizes),
@@ -646,13 +1557,37 @@ end
 -- account's heading (the title, for a provider alone on the card) as a pill. The native details view gets
 -- neither: it draws both itself.
 
+-- The hover is one string of the sheet, as wide as its longest row, and a source's or another extension's own
+-- words can run long (Keeper's stale note is a sentence): past NOTE_GLYPHS such text goes on as many rows as it
+-- takes, broken at spaces (a longer word keeps a row to itself). With its indent a note is then as wide as the
+-- card usually is. The quota details keep the text as it came: they wrap it themselves.
+local NOTE_GLYPHS = 44
+local function wrapped(text: string, glyphs: number): { string }
+	if glyph_count(text) <= glyphs then
+		return { text }
+	end
+	local rows: { string } = {}
+	local current = ""
+	for word in string.gmatch(text, "%S+") do
+		if current ~= "" and glyph_count(current) + 1 + glyph_count(word) > glyphs then
+			table.insert(rows, current)
+			current = word
+		else
+			current = if current == "" then word else current .. " " .. word
+		end
+	end
+	table.insert(rows, current)
+	return rows
+end
+
 -- An account's windows on one row, each window's saved resets beside it as the line has them (`+NF` for Fable
--- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`.
-local function account_summary(prefix: string, windows: { Window }, provider: string?): (string, number)
+-- resets): `alice · 7D 65% +2 · FABLE 7D 81% +1F`, each share as the model says it (left or used). The lowest
+-- share left comes back too, for the row's tone.
+local function account_summary(model: Model, prefix: string, windows: { Window }, provider: string?): (string, number)
 	local text = prefix
 	local lowest = 100
 	for _, window in windows do
-		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. pct_text(window)
+		text ..= " · " .. string.upper(window.bare or window.label) .. " " .. share_label(model, window)
 		if window.saved then
 			text ..= " +" .. tostring(window.saved) .. (if is_fable(provider, window.bare or window.label) then "F" else "")
 		end
@@ -798,12 +1733,23 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						local opaque = #group.windows == 0 and not noted and detail.kind ~= "plan" and detail.kind ~= "observed"
 						if fixed == "details" or status or opaque then
 							local shared = detail.account == nil and account ~= nil and not detail.whole
-							table.insert(into, {
-								text = CARD_INDENT .. (if shared then "Provider · " else "") .. detail.text,
+							local said = (if shared then "Provider · " else "") .. detail.text
+							local row: Row = {
+								text = CARD_INDENT .. said,
 								color = detail_view.color(detail.kind),
 								kind = detail.kind, value = detail.value,
 								account_note = window == nil, shared = shared,
-							})
+							}
+							table.insert(into, row)
+							if fixed ~= "details" then
+								for i, piece in wrapped(said, NOTE_GLYPHS) do
+									if i == 1 then
+										row.text = CARD_INDENT .. piece
+									else
+										table.insert(into, { text = CARD_INDENT .. piece, color = row.color, account_note = row.account_note })
+									end
+								end
+							end
 							noted = true
 						end
 					end
@@ -814,11 +1760,13 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 			local function one_row(name: string, windows: { Window }, color: string?, rule: boolean)
 				if kept < keep then
 					kept += 1
-					local text, low = account_summary((if several then group.label .. " " else "") .. name, windows, group.id)
+					local text, low = account_summary(model, (if several then group.label .. " " else "") .. name, windows, group.id)
 					if #windows == 0 then
 						for _, detail in details do
 							if detail.account == name and detail.kind ~= "plan" then
-								text ..= " · " .. detail.text
+								-- (its first row's worth: the summary is one row)
+								local pieces = wrapped(detail.text, math.max(16, NOTE_GLYPHS - glyph_count(text) - 2))
+								text ..= " · " .. pieces[1] .. (if #pieces > 1 then "…" else "")
 								break
 							end
 						end
@@ -836,7 +1784,7 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				fold_muted = fold_muted or color ~= nil
 				for _, window in windows do
 					if window.pct < lowest then
-						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. pct_text(window)
+						lowest, lowest_text = window.pct, string.upper(window.bare or window.label) .. " " .. share_label(model, window)
 					end
 				end
 				if #windows == 0 and lowest_text == "" then lowest_text = "details" end
@@ -892,9 +1840,9 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						local a, b = window_colors(tone, g)
 						table.insert(new, {
 							text = window_name(window.bare or window.label) .. " window",
-							right = if window.passed then "reset" else pct_text(window) .. " left",
+							right = if window.passed then "reset" else share_label(model, window) .. " " .. share_word(model),
 							color = "var(--oc-win-" .. tone .. ")",
-							share = math.clamp(window.pct, 0, 100) / 100,
+							share = math.clamp(share_of(model, window.pct), 0, 100) / 100,
 							a = a,
 							b = b,
 							lit = accent,
@@ -940,6 +1888,29 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 						add_details(new, run.name, window.label, false)
 					end
 					add_details(new, run.name, nil, r == 1)
+					-- An account with no windows and nothing said yet (a source that is stale or reports no limits)
+					-- would be a bare heading: it says the first thing its source says about it, as the quota details
+					-- do, a note about its state before when it was observed.
+					if hover and run.name and #run.windows == 0 and #new == 1 then
+						local said: Detail? = nil
+						for _, detail in details do
+							if detail.account == run.name and detail.kind ~= "plan" and (said == nil or ((said :: Detail).kind == "observed" and detail.kind ~= "observed")) then
+								said = detail
+							end
+						end
+						if said then
+							local note = said :: Detail
+							for i, piece in wrapped(note.text, NOTE_GLYPHS) do
+								table.insert(new, {
+									text = CARD_INDENT .. piece,
+									color = detail_view.color(note.kind),
+									kind = if i == 1 then note.kind else nil,
+									value = if i == 1 then note.value else nil,
+									account_note = true,
+								})
+							end
+						end
+					end
 					if run.name and hover then
 						new[1].bar = #new
 					end
@@ -968,10 +1939,11 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 				local tone = tone_of(lowest)
 				table.insert(rows, {
 					text = string.format(
-						"%s+%d more account%s · lowest %s",
+						"%s+%d more account%s · %s %s",
 						if several then group.label .. " " else "",
 						folded,
 						if folded == 1 then "" else "s",
+						if model.used then "most used" else "lowest",
 						lowest_text
 					),
 					color = if fold_muted then "var(--oc-mute)" elseif tone == "ok" then accent else "var(--oc-win-" .. tone .. ")",
@@ -982,7 +1954,10 @@ local function card(model: Model, hint: string, limit: number, fixed: string?): 
 			end
 		end
 		for _, other in model.others do
-			table.insert(rows, { text = other, color = "var(--oc-soft)", account_note = true })
+			local pieces: { string } = if fixed == "details" then { other } else wrapped(other, NOTE_GLYPHS + 2)
+			for _, piece in pieces do
+				table.insert(rows, { text = piece, color = "var(--oc-soft)", account_note = true })
+			end
 		end
 		if fixed ~= "details" then
 			table.insert(rows, { text = hint, color = "var(--oc-hint)", rule = true })
@@ -1054,7 +2029,7 @@ local CARD_CSS = [==[
    row by row, colors the text, and each window's row sits on a meter with a lit tip */
 $TARGET {
 	content: "$CONTENT";
-	$PLACE
+	$PLACE$FIT
 	padding: 5px 12px 9px;
 	border-radius: 12px;
 	white-space: pre;
@@ -1100,14 +2075,10 @@ local CARD_KEYFRAMES = [==[
 }
 ]==]
 
--- The card's sheet for its rows. By default it is the hover target's `::after` over the line, rising into place
--- after a beat; `target` (the settings panel's preview) draws the same card, still, on another element.
-local function card_css(rows: { Row }, target: string?): string
-	-- the card's 11px mono glyphs are 6.6px wide; the estimate icons' colors (tokens, API-equivalent value) and
-	-- the plan pill's gold
-	local GLYPH_W = 6.6
-	local TOKENS_ICON, COST_ICON = "light-dark(#4f5bd5, #8b95ff)", "var(--ok)"
-	local PLAN_A, PLAN_B = "light-dark(#b7791f, #f6c453)", "light-dark(#975a16, #d69e2e)"
+-- How many of its glyphs (11px mono: 6.6px each) the card's longest row takes, a window's share or a heading's plan
+-- at its right end included; and the card's width in px with its 12px of padding either side.
+local CARD_GLYPH = 6.6
+local function card_glyphs(rows: { Row }): number
 	local width = 28
 	for _, row in rows do
 		local n = glyph_count(row.text)
@@ -1118,6 +2089,41 @@ local function card_css(rows: { Row }, target: string?): string
 			n += 4 + glyph_count(row.badge :: string)
 		end
 		width = math.max(width, n)
+	end
+	return width
+end
+
+local function card_px(rows: { Row }): number
+	return card_glyphs(rows) * CARD_GLYPH + 24
+end
+
+-- The card's sheet for its rows. By default it is the hover target's `::after` over the line, rising into place
+-- after a beat, from its left end (from its right end, `at_right`: over a stacked line at the composer's right
+-- edge); `target` (the settings panel's preview) draws the same card, still, on another element.
+-- Over the line the card is never wider than its pane has room for: at most CARD_PASS past the target's far end
+-- (`host_px`: the target's width while the pane has room, see `host_width`), and in a pane narrower than that its
+-- text shrinks to fit, every row alike (`text-fit`), instead of running out of the pane. What is drawn over the
+-- text (a plan's pill, the estimates' icons) is placed as a share of the row, so it stays on its glyphs then.
+local function card_css(rows: { Row }, target: string?, at_right: boolean?, host_px: number?): string
+	local GLYPH_W = CARD_GLYPH
+	-- the estimate icons' colors (tokens, API-equivalent value)
+	local TOKENS_ICON, COST_ICON = "light-dark(#4f5bd5, #8b95ff)", "var(--ok)"
+	local width = card_glyphs(rows)
+	-- a layer `w` px wide, its middle `dx` px from cell `cell` of the row: a background-position percentage places
+	-- the layer's own share of the slack, which the px part makes up for
+	local function across(cell: number, w: number, dx: number): string
+		local share = cell / width
+		return string.format("calc(%s%% + %spx)", num(share * 100, 4), num(share * w - w / 2 + dx, 3))
+	end
+	local fit = ""
+	if target == nil then
+		local cap = "100% + " .. num(CARD_PASS) .. "px"
+		local host = host_px or 0
+		if hugs(host, card_px(rows)) then
+			-- its target is as wide as its short line, not as its pane's room: no cap
+			cap ..= string.format(" + clamp(0px, calc((0.5px - max(100%% - %spx, %spx - 100%%)) * 100000), 100000px)", num(host), num(host))
+		end
+		fit = "\n\tmax-width: calc(" .. cap .. ");\n\toverflow: hidden;\n\ttext-fit: shrink consistent;"
 	end
 	local lines: { string } = {}
 	local paint: { string } = {}
@@ -1202,20 +2208,21 @@ local function card_css(rows: { Row }, target: string?): string
 				"content-box"
 			)
 		end
-		-- the plan pill: the badge's text and a cell either side, ringed in gold with a glow, measured from the
-		-- right edge where the text's last cell ends (`calc(100% - Npx)` puts a layer's right edge N px in)
+		-- the plan pill: the badge's text and a cell either side, ringed in gold with a glow, around the row's last
+		-- cells (the text's last cell ends at the right edge)
 		if row.badge then
-			local w = (glyph_count(row.badge :: string) + 2) * GLYPH_W
+			local cells = glyph_count(row.badge :: string) + 2
+			local w = cells * GLYPH_W
 			local r = 7
 			local top = y + 2
-			local function at(right: number, down: number): string
-				return string.format("calc(100%% %s %spx) %spx", if right < 0 then "+" else "-", num(math.abs(right)), num(top + down))
+			local function at(part: number, dx: number, down: number): string
+				return across(width - cells / 2, part, dx) .. " " .. num(top + down) .. "px"
 			end
 			local edge = string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 80), faded(PLAN_B, 80))
 			local rim = string.format("%spx 1px", num(w - 2 * r))
-			layer(edge, at(r, 0), rim, rim, "content-box")
-			layer(edge, at(r, 2 * r - 1), rim, rim, "content-box")
-			for _, cap in { { color = PLAN_A, side = "100%", right = w - r }, { color = PLAN_B, side = "0%", right = 0 } } do
+			layer(edge, at(w - 2 * r, 0, 0), rim, rim, "content-box")
+			layer(edge, at(w - 2 * r, 0, 2 * r - 1), rim, rim, "content-box")
+			for _, cap in { { color = PLAN_A, side = "100%", dx = (r - w) / 2 }, { color = PLAN_B, side = "0%", dx = (w - r) / 2 } } do
 				local half = string.format("%spx %spx", num(r), num(2 * r))
 				layer(
 					string.format(
@@ -1223,26 +2230,26 @@ local function card_css(rows: { Row }, target: string?): string
 						num(r), num(r), cap.side,
 						faded(cap.color, 30), faded(cap.color, 30), faded(cap.color, 80), faded(cap.color, 80), faded(cap.color, 0)
 					),
-					at(cap.right, 0), half, half, "content-box"
+					at(r, cap.dx, 0), half, half, "content-box"
 				)
 			end
 			local body = string.format("%spx %spx", num(w - 2 * r), num(2 * r))
-			layer(string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 30), faded(PLAN_B, 30)), at(r, 0), body, body, "content-box")
+			layer(string.format("linear-gradient(90deg, %s, %s)", faded(PLAN_A, 30), faded(PLAN_B, 30)), at(w - 2 * r, 0, 0), body, body, "content-box")
 			local glow = string.format("%spx %spx", num(w + 16), num(2 * r + 14))
-			layer(string.format("radial-gradient(closest-side, %s, %s)", faded(PLAN_A, 22), faded(PLAN_A, 0)), at(-8, -7), glow, glow, "content-box")
+			layer(string.format("radial-gradient(closest-side, %s, %s)", faded(PLAN_A, 22), faded(PLAN_A, 0)), at(w + 16, 0, -7), glow, glow, "content-box")
 		end
 		-- an estimate's icon: a tinted disc ringed in its color over the icon's middle cell; the tokens icon
 		-- draws its lines in the text's color (the cost icon's `$` is a glyph of the row)
 		for _, icon in (row.icons or {}) :: { { cell: number, kind: string } } do
 			local color = if icon.kind == "tokens" then TOKENS_ICON else COST_ICON
-			local cx = (icon.cell + 1.5) * GLYPH_W
+			local mid = icon.cell + 1.5
 			local cy = y + CARD_ROW / 2
 			if icon.kind == "tokens" then
 				for k, length in { 5, 5, 3 } do
 					local size = string.format("%spx 1px", num(length))
 					layer(
 						string.format("linear-gradient(%s, %s)", solid("var(--oc-head)"), solid("var(--oc-head)")),
-						string.format("%spx %spx", num(cx - 2.5), num(cy + (k - 2) * 2.5 - 0.5)),
+						across(mid, length, length / 2 - 2.5) .. " " .. num(cy + (k - 2) * 2.5 - 0.5) .. "px",
 						size, size, "content-box"
 					)
 				end
@@ -1252,7 +2259,7 @@ local function card_css(rows: { Row }, target: string?): string
 					"radial-gradient(closest-side, %s 0%%, %s 72%%, %s 80%%, %s 92%%, %s 100%%)",
 					faded(color, 22), faded(color, 22), solid(color), solid(color), faded(color, 0)
 				),
-				string.format("%spx %spx", num(cx - 6.5), num(cy - 6.5)),
+				across(mid, 13, 0) .. " " .. num(cy - 6.5) .. "px",
 				"13px 13px", "13px 13px", "content-box"
 			)
 		end
@@ -1287,10 +2294,15 @@ local function card_css(rows: { Row }, target: string?): string
 	local sizes_css = table.concat(sizes, ", ")
 	return fill(CARD_CSS, {
 		TARGET = target or host(nil) .. ":hover::after",
-		PLACE = if target then "display: block;" else "position: absolute;\n\tleft: 0;\n\tbottom: calc(100% + 8px);",
+		PLACE = if target
+			then "display: block;"
+			else "position: absolute;\n\t" .. (if at_right then "right: 0;" else "left: 0;") .. "\n\tbottom: calc(100% + 8px);",
+		FIT = fit,
 		MOTION = if target
 			then ""
-			else "transform-origin: 16px 100%;\n\t/* after a beat: it rises into place and its meters fill */\n\tanimation:\n\t\tomp-usage-card 0.28s var(--out) 0.35s both,\n\t\tomp-usage-fill 0.7s var(--out) 0.4s both;",
+			else "transform-origin: "
+				.. (if at_right then "calc(100% - 16px)" else "16px")
+				.. " 100%;\n\t/* after a beat: it rises into place and its meters fill */\n\tanimation:\n\t\tomp-usage-card 0.28s var(--out) 0.35s both,\n\t\tomp-usage-fill 0.7s var(--out) 0.4s both;",
 		KEYFRAMES = if target then "" else fill(CARD_KEYFRAMES, { FROM_SIZES = table.concat(from_sizes, ", "), SIZES = sizes_css }),
 		CONTENT = table.concat(lines, "\\A "),
 		IMAGES = table.concat(images, ", "),
@@ -1335,6 +2347,7 @@ $METER_STILL::after {
 }
 ]==]
 
+-- A line without bars (Ring, Compact, the bar switched off) prints again and has no comets to run.
 local PULSE_CSS = [==[
 /* the change: the line prints again, left to right, while a comet runs each changed bar to its new level,
    flares and settles into its tip */
@@ -1345,12 +2358,15 @@ $METER::before {
 	-stencil-text-stagger: 0.008;
 	animation: $REVEAL 700ms var(--out) 1 both;
 }
-$METER::after {
-	animation: $RUN $DURATION linear 1 both;
-}
 @keyframes $REVEAL {
 	from { -stencil-progress: 0; }
 	to { -stencil-progress: 1; }
+}
+$COMETS]==]
+
+local COMETS_CSS = [==[
+$METER::after {
+	animation: $RUN $DURATION linear 1 both;$CLIP
 }
 @keyframes $RUN {
 $FRAMES
@@ -1362,15 +2378,17 @@ local function eased(u: number): number
 end
 
 -- The comets, as keyframes over the tips' layers (a head and a trail per bar; a bar that didn't move keeps its
--- tip): the head appears at the bar's start, runs to the share, flares and shrinks into the tip, the trail behind
--- it; in the bar's color when quota went down, `--ok` when it came back.
+-- tip; what doesn't move stays under them): the head appears at the bar's start, runs to the share, flares and
+-- shrinks into the tip, the trail behind it; in the bar's color when quota went down, `--ok` when it came back.
 local function pulse_css(line: Line, p: Pulse): string
 	local frames: { string } = {}
+	local still = rest_layers(line)
 	for _, at in RUN_STOPS do
-		local images: { string } = {}
-		local positions: { string } = {}
-		local sizes: { string } = {}
+		local images: { string } = table.clone(still.images)
+		local positions: { string } = table.clone(still.positions)
+		local sizes: { string } = table.clone(still.sizes)
 		for _, bar in line.bars do
+			local y = bar.row * LINE_ROW + BAR_Y
 			local from = bar.at * GLYPH
 			local to = (bar.at + bar.fill) * GLYPH
 			local x, w, h, trail, ink, strength = to, TIP_W, TIP_H, 0, bar.b, 55
@@ -1399,10 +2417,10 @@ local function pulse_css(line: Line, p: Pulse): string
 			end
 			table.insert(images, tip_image(ink, strength))
 			table.insert(images, trail_image(ink))
-			table.insert(positions, string.format("%spx %spx", num(x - w / 2), num(BAR_Y - h / 2)))
-			table.insert(positions, string.format("%spx %spx", num(x - trail), num(BAR_Y - TRAIL_H / 2)))
-			table.insert(sizes, string.format("%s %spx", fits(bar, w), num(h)))
-			table.insert(sizes, string.format("%s %spx", fits(bar, trail), num(TRAIL_H)))
+			table.insert(positions, string.format("%spx %spx", num(x - w / 2), num(y - h / 2)))
+			table.insert(positions, string.format("%spx %spx", num(x - trail), num(y - TRAIL_H / 2)))
+			table.insert(sizes, string.format("%s %spx", fits(line, bar.ends, w), num(h)))
+			table.insert(sizes, string.format("%s %spx", fits(line, bar.ends, trail), num(TRAIL_H)))
 		end
 		table.insert(
 			frames,
@@ -1418,21 +2436,31 @@ local function pulse_css(line: Line, p: Pulse): string
 	return fill(PULSE_CSS, {
 		METER = meter(),
 		REVEAL = "omp-usage-reveal-" .. tostring(p.seq), -- a new name per change restarts the animation
-		RUN = "omp-usage-run-" .. tostring(p.seq),
-		DURATION = tostring(PULSE_MS) .. "ms",
-		FRAMES = table.concat(frames, "\n"),
+		COMETS = if #line.bars > 0
+			then fill(COMETS_CSS, {
+				METER = meter(),
+				RUN = "omp-usage-run-" .. tostring(p.seq),
+				DURATION = tostring(PULSE_MS) .. "ms",
+				-- (a narrow pane's copy is this layer's text: its paint stays the one layer clipped to it)
+				CLIP = if line.short then "\n\tbackground-clip: " .. text_layer_clips(#still.images + 2 * #line.bars) .. ";" else "",
+				FRAMES = table.concat(frames, "\n"),
+			})
+			else "",
 	})
 end
 
 local function sheet(model: Model, settings: Settings, p: Pulse?, hint: string): string
-	if #model.groups == 0 and #model.others == 0 then
+	local line = line_of(model, settings)
+	-- nothing to draw (no usage, and no other status, or none the line shows)
+	if line.text == "" then
 		return ""
 	end
-	local line = line_of(model)
 	local still = fill(STILL_CSS, { HOST = host(nil), HOST_STILL = host(".sf-still"), METER = meter(), METER_STILL = meter(".sf-still") })
-	local css = line_css(line, model, settings) .. card_css(card(model, hint, settings.card_rows)) .. still
+	local right = settings.place == "stack" and settings.align == "right"
+	local rows = card(model, hint, settings.card_rows)
+	local css = line_css(line, model, settings, card_px(rows)) .. card_css(rows, nil, right, line.glyphs * GLYPH + 12) .. still
 	-- Only while it runs: a sheet rewritten later (a countdown tick) must not replay it.
-	if p and #line.bars > 0 and tern.now() < p.until_ms then
+	if p and tern.now() < p.until_ms then
 		css ..= pulse_css(line, p)
 	end
 	return css
@@ -1572,7 +2600,10 @@ return {
 	last_card_runs = last_card_runs,
 	fill = fill,
 	line_of = line_of,
+	reserve = reserve,
 	line_paint = line_paint,
+	line_height = line_height,
+	ghost_content = ghost_content,
 	tips = tips,
 	FOCUSED_PANE = FOCUSED_PANE,
 	line_pane = current_line_pane,

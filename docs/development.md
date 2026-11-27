@@ -84,7 +84,9 @@ They test the Luau half without Tern: parsing the extension's line, combining ac
 colors, pace and freshness; the line's model from fixture caches (fresh, old, stale, passed resets, reset times,
 first-version and compact caches, a cache too big or unreadable, Zai and Zai Coding Plan, remote and WSL panes);
 alert candidates and the alerts across two windows; the line, the widget segment and the hidden status facts as a
-window draws them; and a linked clone's Download Update.
+window draws them; Display (each style's line, shares left and used, the parts on the line, a stacked line's rows,
+the sheet that places each position, and settings from before it reading as they did); and a linked clone's
+Download Update.
 
 They need the Luau CLI, `luau`, from the [Luau releases](https://github.com/luau-lang/luau/releases)
 (`luau-windows.zip`, `luau-ubuntu.zip` or `luau-macos.zip`). Put it on PATH, or set `LUAU` to it.
@@ -117,8 +119,10 @@ string instead of raising it, so `run.mjs` checks for it.
 `tests/smoke/matrix.mjs` drives a headless Tern (`tern.com serve`, `tern.com ctl`) with a real omp in an agent pane
 and fixture caches. It checks freshness (fresh, 10 minutes, 30 minutes, back), reset times across cache age, passed
 resets, Show pace, card height, a combined pool with a stale seat, Zai and Zai Coding Plan, a first-version and an
-oversize cache, the widget segment, light and dark, Reduce Motion, a short pane, a model switch, the usage status in
-unfocused panes, alerts with two windows open, and a pane on another host (`ctl remote loopback`).
+oversize cache, the widget segment, light and dark, Reduce Motion, a short pane, Display (each style, shares used,
+and each position with a block right above the composer: the sheet parses and the block ends clear of the line), a
+model switch, the usage status in unfocused panes, alerts with two windows open, and a pane on another host
+(`ctl remote loopback`).
 `tests/smoke/updater.mjs` checks a linked clone's Download Update when Tern reloads the plugin during the
 fast-forward, and a pending update the clone already has. For an installed copy, it checks Download Update and that it
 drops the old `omp-usage/` folder, an update cut off before staging with three windows loading (also setting up the omp

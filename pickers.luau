@@ -181,6 +181,22 @@ local function menu_items(settings: Settings, providers: { Provider }, keys: str
 			mode = mode.mode,
 		})
 	end
+	-- Display: the line's style, place, a stacked line's side, its parts and its shares
+	local function label_in(list: { any }, id: string): string
+		for _, choice in list do
+			if choice.id == id then
+				return choice.label
+			end
+		end
+		return id
+	end
+	table.insert(items, { label = "Line style…", detail = label_in(data.STYLES, settings.style), group = "Display", pick = "display", kind = "style" })
+	table.insert(items, { label = "Line position…", detail = label_in(data.PLACES, settings.place), group = "Display", pick = "display", kind = "place" })
+	if settings.place == "stack" then
+		table.insert(items, { label = "Stacked at…", detail = label_in(data.ALIGNS, settings.align), group = "Display", pick = "display", kind = "align" })
+	end
+	table.insert(items, { label = "What the line shows…", detail = "provider, window, bar, share, countdown, resets, plan", group = "Display", pick = "parts" })
+	table.insert(items, { label = "Shares…", detail = label_in(data.METRICS, settings.metric), group = "Display", pick = "display", kind = "metric" })
 	table.insert(items, { label = "Choose providers…", detail = details.selected, group = "Providers", pick = "choose" })
 	-- only with something to reorder
 	if #providers > 1 then
@@ -510,6 +526,75 @@ local function open_pace(cx: WindowCx)
 				store.set(data.KV_PACE, (item :: any).pace)
 				after_change(next_cx or cx)
 			end
+		end)
+end
+
+-- Switches part `id` of the line (Display's On the line), unless the style has none of it or it is the last of a
+-- window's bar and share; whether it switched. Only the parts switched from their default are stored.
+local function toggle_part(id: string): boolean
+	local settings = load_settings()
+	if settings.parts[id] == nil or (id == "bar" and settings.style == "compact") then
+		return false
+	end
+	local after = table.clone(settings)
+	after.parts = table.clone(settings.parts)
+	after.parts[id] = not settings.parts[id]
+	if data.line_parts(after)[id] ~= after.parts[id] then
+		return false
+	end
+	local parts: { [string]: boolean } = {}
+	for _, part in data.PARTS do
+		if after.parts[part.id] ~= part.default then
+			parts[part.id] = after.parts[part.id]
+		end
+	end
+	store.set(data.KV_PARTS, parts)
+	return true
+end
+
+-- Display's choices in the palette: the style, the position, a stacked line's side and the shares, each a list
+-- that closes on a pick; the parts, switched one at a time until Esc.
+local DISPLAY_CHOICES: { [string]: { list: { any }, key: string, field: string, placeholder: string } } = {
+	style = { list = data.STYLES, key = data.KV_STYLE, field = "style", placeholder = "Draw the line's windows how?" },
+	place = { list = data.PLACES, key = data.KV_PLACE, field = "place", placeholder = "Where does the line sit?" },
+	align = { list = data.ALIGNS, key = data.KV_ALIGN, field = "align", placeholder = "Which side does the stacked line sit at?" },
+	metric = { list = data.METRICS, key = data.KV_METRIC, field = "metric", placeholder = "Show what's left of each window, or what's used?" },
+}
+
+local function open_display(cx: WindowCx, kind: string)
+	local choice = DISPLAY_CHOICES[kind]
+	local current = (load_settings() :: any)[choice.field]
+	local items: { PickItem } = {}
+	for _, option in choice.list do
+		local detail = if option.sample then option.sample .. " · " .. option.detail else option.detail
+		table.insert(items, { label = option.label, detail = detail, current = option.id == current, value = option.id })
+	end
+	cx:pick({ items = items, placeholder = choice.placeholder, icon = "gauge" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item then
+				store.set(choice.key, (item :: any).value)
+				after_change(next_cx or cx)
+			end
+		end)
+end
+
+local function open_parts(cx: WindowCx)
+	local shown = data.line_parts(load_settings())
+	local items: { PickItem } = {}
+	for _, part in data.PARTS do
+		table.insert(items, { label = part.label, detail = part.detail, current = shown[part.id], part = part.id })
+	end
+	cx:pick({ items = items, placeholder = "What does the line show of each window? Esc when done", action = "toggle" })
+		:next(function(item: PickItem?, _err: string?, next_cx: WindowCx?)
+			if item == nil then
+				return
+			end
+			local cx2 = next_cx or cx
+			if not toggle_part((item :: any).part) then
+				cx2:toast("info", "That one stays", "Compact draws no bar, and a window keeps its bar or its share")
+			end
+			after_change(cx2)
+			open_parts(cx2)
 		end)
 end
 
@@ -851,6 +936,9 @@ return {
 	open_pace = open_pace,
 	ALERTS_DETAIL = ALERTS_DETAIL,
 	open_usage_opens = open_usage_opens,
+	toggle_part = toggle_part,
+	open_display = open_display,
+	open_parts = open_parts,
 	move_account = move_account,
 	after_change = after_change,
 	prompt_color = prompt_color,
