@@ -309,8 +309,10 @@ Every account and window in full, in a view of its own, with no row limit. Open 
 - **Quota details** at the end of the settings panel's bottom bar
 - **omp Usage: Quota details** in the palette
 
-It opens over the tab. Click outside it or press Esc to close it, or drag its header to keep it around. **Settings**
-swaps it for the settings panel (and the panel's **Quota details** swaps right back); **Close** closes it.
+It opens over the tab and takes the keyboard. To close it, click outside it, click **Close**, or press Ctrl+Shift+W
+(Tern's **Close block**). Esc doesn't close it, though Tern's footer under it says so (see
+[Troubleshooting](#troubleshooting)). Drag its header to keep it around. **Settings** swaps it for the settings panel
+(and the panel's **Quota details** swaps right back).
 
 Each provider or account gets a heading in its own color, then a box per window, side by side while they fit: the
 share, a bar in the line's colors, and its resets, pace and notes. A window running low is ringed amber, and red when
@@ -341,7 +343,7 @@ Changes apply right away, in every window.
 
 | Section | What it does |
 | --- | --- |
-| Preview | The line and its card, drawn for the last omp pane you used. Under it, **Card height**: 16 to 50 rows, 26 by default. An estimate under a bar takes a row; everything else Keeper reports goes in the quota details. Then **Line background**: Glass (default), Solid, or Clear. Then **Show pace**: Off, When ahead (default), or Always (see [Pace](#pace)) |
+| Preview | The line and its card, drawn for the last omp pane you used, the line on the background you picked. Under it, **Card height**: 16 to 50 rows, 26 by default. An estimate under a bar takes a row; everything else Keeper reports goes in the quota details. Then **Line background**: Glass (default), Solid, or Clear, which the preview's line takes as you click. Then **Show pace**: Off, When ahead (default), or Always (see [Pace](#pace)) |
 | Display | How the line looks and where it sits (see [Display](#display)). **Style**: Instrument (default), Blocks, Ring or Compact. **Position**: Above the bar (default; in Spine, under it), Under the bar, or Stacked (a block over the chat, a row per window, up to 4; past that the last row sums up the rest), at the composer's **Right** (default) or **Left**. **On the line**: provider, window, bar, share, countdown, saved resets, plan (a gold pill, off by default) and other statuses; a window keeps its bar or its share. **Shares**: Left (default) or Used, on the line, the card and the quota details |
 | Show | **Current model** (default), **All providers** (countdowns move to the card), or **Selected providers**. When there's no quota data for them, the line falls back to the focused session's own status |
 | Providers | Pick a row up by its grip, then click where it goes. Click a window to hide or show it everywhere. The switch adds the provider to Selected. A provider or account whose plan is known shows it as a gold pill beside its switch: click the pill to leave that plan out of the card and the quota details (it fades and is struck through), again to show it. With several accounts, each one gets its own row: grip, name (click it to show only that account, again for all), windows, plan, and a switch that takes it off the line, the card and the quota details. A chip next to the provider says what's showing, with a button for the next option: `all 8 accounts` with **combine**, `combined · 10 accounts ✕` with **by plan**, `by plan · 2 Max, 4 Pro, 4 Ultra ✕` (or `by plan · 6 with 5H, 4 without ✕`) with **all in one**, or `only dev.ops ✕`. Grouped by windows, each account's row is tagged with its group (`5H`, `no 5H`) |
@@ -353,7 +355,7 @@ Changes apply right away, in every window.
 External quota sources are set up in a file, not the panel (see [External quota sources](#external-quota-sources)).
 Their accounts show up under Providers like omp's own.
 
-<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line with its card open, Claude's weekly window with a pace row and a saved reset, its Fable weekly window in amber at 25% left with a 1.5× pace · empty ~1d 5h row, and Codex's weekly window with four saved resets; the Card height and Line background pills; Show pace with three pills, Off, When ahead (picked) and Always; the Display section with its four styles, Instrument picked, its three positions, Above the bar picked, the On the line pills, all on but Plan, and Shares on Left; the Show choices with All providers picked; Claude and Codex with their windows' shares, plan pills and Selected switches; and their color swatches" width="788">
+<img src="docs/images/settings-panel.png" alt="The settings panel: a preview of the line on its strip of Liquid Glass with its card open, Claude's weekly window at 38% left with a saved reset, its Fable weekly window in amber at 25% left with a 1.3× pace · empty ~1d 8h row, and Codex's weekly window with four saved resets; the Card height and Line background pills, Glass picked; Show pace with three pills, Off, When ahead (picked) and Always; the Display section with its four styles, Instrument picked, its three positions, Above the bar picked, the On the line pills, all on but Plan, and Shares on Left; the Show choices with All providers picked; Claude and Codex with their windows' shares, plan pills and Selected switches; and their color swatches" width="788">
 
 Further down, the Widget bar and Alerts sections, here with alerts on:
 
@@ -390,7 +392,7 @@ into one:
 In the panel, click an account's name to show only that one (click it again, or the chip next to the provider, to go
 back to all of them). The switches take accounts off the line and the card:
 
-<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the preview shows only dev.ops on the line and in its card, with pace rows under its weekly and Fable weekly windows, and the others summed up a row each; under it the Card height and Line background pills, Show pace's Off, When ahead (picked) and Always pills, and the Display and Show sections; then the chip only dev.ops beside Claude and a row per account with its grip, name, windows, plan and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; Codex below" width="788">
+<img src="docs/images/settings-accounts.png" alt="The settings panel with ten Claude accounts: the preview shows only dev.ops on the line, on its strip of Liquid Glass, and in its card, with pace rows under its weekly and Fable weekly windows, and the others summed up a row each; under it the Card height and Line background pills, Show pace's Off, When ahead (picked) and Always pills, and the Display and Show sections; then the chip only dev.ops beside Claude and a row per account with its grip, name, windows, plan and switch, dev.ops tagged only, claude-team@pinegg and max-plan-2 switched off and struck through, the rest faded; Codex below" width="788">
 
 That gives the line room for all of that account's windows, and the card sums up the others in a row each:
 
@@ -469,7 +471,11 @@ have, and every new commit in full.
 | --- | --- |
 | **Download Update** | Brings the plugin (and an installed copy's omp extension) up to date and reloads it. The toast says if omp sessions need a restart |
 | **Skip This Version** | Hides the pill until the next plugin change |
-| **Not Now** / Esc | Closes the card. The pill stays |
+| **Not Now** | Closes the card. The pill stays |
+
+A click outside the card closes it too, and so does Ctrl+Shift+W (Tern's **Close block**). Esc doesn't, though Tern's
+footer under the card says so (see [Troubleshooting](#troubleshooting)). The card takes the keyboard while it's open,
+so nothing you type reaches the omp pane behind it.
 
 **Restart your omp sessions after an update** that changes the omp extension. A running session keeps the extension
 it started with, and once the extension's files change it stops writing the numbers every pane reads, so the line
@@ -552,6 +558,7 @@ A few things to know:
 | No alert toasts | Alerts are off by default (**Alerts** in the panel). They toast only crossings, not what was already low when you turned them on, and only numbers less than 30 minutes old |
 | Clicking the line does nothing | That's expected: Tern doesn't give plugins clicks on omp's composer. Use the shortcuts, or the gauge in the widget bar |
 | Alt+Shift+U or Ctrl+Alt+U does nothing | Another binding took it. Bind `plugin.omp-usage.details` or `plugin.omp-usage.panel` to something else |
+| Esc doesn't close the quota details or the update card | Tern's footer under them says `press esc to close`, but Tern passes no keys to a plugin's view and keeps Esc for itself, so the plugin can't act on it. Click outside, use **Close** or **Not Now**, or press Ctrl+Shift+W (Tern's **Close block**, or whatever you bound `close_pane` to) |
 | No update pill, or no gauge | Add the **Plugin segments** widget to Tern's widget bar (palette › Edit widgets…), or use the panel's Updates section. Checks might also be Off. The gauge only shows while an omp pane has focus |
 | The gauge in the widget bar never warns | It only warns while a window in the focused omp pane is at 1.1× its [pace](#pace) or more, and never while **Show pace** is Off |
 | `omp Usage can't check for updates` | It needs git on `PATH`; a clone needs a branch tracking a remote, and an installed copy needs its `upstream` file naming the repo (`https://github.com/jmazzola/tern-plugin-omp-usage.git`). The toast gives the reason |

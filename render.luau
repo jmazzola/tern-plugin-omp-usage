@@ -1239,12 +1239,13 @@ local SHORT_TIPS = [==[
 	--ou-dim: var(--t4);]==]
 
 -- The line's backdrop at rest, by the Line background setting (see data.luau's BACKDROPS): the target under the
--- line as Liquid Glass, opaque in the card's glass, or nothing.
-local BACKDROP_CSS: { [string]: string } = {
+-- line as Liquid Glass, opaque in the card's glass, or nothing; `hover`: what the hovered capsule takes back off.
+local BACKDROP_CSS: { [string]: { rest: string, hover: string } } = {
 	-- Liquid Glass: a faint tint the chat shows through, softened rather than blurred away (a light blur, more
 	-- saturation), a sheen falling from the top edge and the top-left corner, a lit rim above and a shaded one below.
 	-- Each color is a relative one: Tern drops a gradient stop that is a bare `light-dark()`.
-	glass = [==[
+	glass = {
+		rest = [==[
 $HOST {
 	background-color: light-dark(rgb(from var(--card) r g b / 30%), rgb(from var(--pop-bg) r g b / 22%));
 	background-image:
@@ -1256,15 +1257,27 @@ $HOST {
 		inset 0 1px 0 light-dark(rgb(255 255 255 / 85%), rgb(255 255 255 / 20%)),
 		inset 0 -1px 0 light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 30%)),
 		0 6px 16px -10px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 60%));
-}
+}]==],
+		hover = [==[
 /* hovered, the opaque capsule as with any background: no sheen, nothing behind to soften */
 $HOST:hover {
 	background-image: none;
 	backdrop-filter: none;
 }]==],
-	solid = "$HOST {\n\tbackground-color: var(--ou-glass);\n}",
-	clear = "",
+	},
+	solid = { rest = "$HOST {\n\tbackground-color: var(--ou-glass);\n}", hover = "" },
+	clear = { rest = "", hover = "" },
 }
+
+-- The backdrop's rules for `target`, the box under a line: the composer's hover target, which also takes the
+-- hover's (`hover`), or the one under the line in the panel's preview, which is never a capsule.
+local function backdrop_css(settings: Settings, target: string, hover: boolean): string
+	local css = BACKDROP_CSS[settings.backdrop]
+	if css == nil then
+		return ""
+	end
+	return fill(if hover and css.hover ~= "" then css.rest .. "\n" .. css.hover else css.rest, { HOST = target })
+end
 
 -- The line's box height in px: a row's 13px, or a stacked line's rows 15px apart.
 local function line_height(line: Line): number
@@ -1506,7 +1519,7 @@ local function line_css(line: Line, model: Model, settings: Settings, card: numb
 		ROOM = room_css(line, settings),
 		HOST = host(nil),
 		PALETTE = palette_css(model, settings),
-		BACKDROP = fill(BACKDROP_CSS[settings.backdrop] or "", { HOST = host(nil) }),
+		BACKDROP = backdrop_css(settings, host(nil), true),
 		CONTENT = line_content(line),
 		HEIGHT = height,
 		HOST_HEIGHT = num(line_height(line) + 2) .. "px",
@@ -2609,6 +2622,7 @@ return {
 	line_pane = current_line_pane,
 	set_line_pane = set_line_pane,
 	palette_css = palette_css,
+	backdrop_css = backdrop_css,
 	card = card,
 	card_css = card_css,
 	sheet = sheet,

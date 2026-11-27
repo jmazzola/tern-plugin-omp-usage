@@ -58,18 +58,20 @@ function closeOther() {
   if (!serve.tree(".tn-pane:not(.agent).on").length) serve.ctl("focus", "right");
   if (serve.tree(".tn-pane:not(.agent).on").length) serve.ctl("close");
 }
-// Esc first (the README's way for the details; returns whether it closed), then the pane itself
+// The README's key for the details first: Tern's Close block (Ctrl+Shift+W, which a headless serve takes as
+// Meta+Shift+W), pressed only while the canvas has the focus, since it closes whichever pane does; returns whether
+// that closed it. Esc isn't tried: Tern gives a canvas no keys. Then the pane itself.
 async function closeCanvas() {
-  serve.ctl("key", "Escape");
+  if (serve.tree(".tn-pane:not(.agent).on").length) serve.ctl("key", "Meta+Shift+W");
   await sleep(800);
-  const byEsc = canvases() === 0;
+  const byKey = canvases() === 0;
   for (let i = 0; i < 3 && canvases(); i += 1) {
     closeOther();
     await sleep(800);
   }
   serve.ctl("focus", "left");
   await sleep(300);
-  return byEsc;
+  return byKey;
 }
 async function openPanel() {
   serve.ctl("palette", "omp Usage: Settings panel");
@@ -114,8 +116,8 @@ scenarios.details = async () => {
       if (kv["omp-usage.hidden"] && /5-hour|5h window/i.test(text)) problems.push("details show a hidden window");
     }
     const png = shot(`details-${name}`, null);
-    const byEsc = await closeCanvas();
-    if (!byEsc) problems.push("Esc didn't close the details (README: Click outside it or press Esc to close it); closed with its Close block button");
+    const byKey = await closeCanvas();
+    if (!byKey) problems.push("Ctrl+Shift+W (Tern's Close block) didn't close the focused details (README: click outside it, click Close, or press Ctrl+Shift+W); closed with `ctl close`");
     if (canvases() !== 0) problems.push("the details wouldn't close");
     record(`details ${name}`, problems.length === 0, `${problems.join("; ") || "ok"}\nline: ${v.line}\ndetails: ${(text ?? "").slice(0, 600)}`, [png]);
   }

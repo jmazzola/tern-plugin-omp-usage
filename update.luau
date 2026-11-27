@@ -1279,7 +1279,15 @@ local function show_card(cx: WindowCx, offer: Offer)
 	end)
 	if not ok or opened == nil then
 		cx:toast("error", "omp Usage couldn't show the update", tostring(if ok then err else opened))
+		return
 	end
+	-- Tern leaves the keyboard in the pane under a new glimpse. The card takes it, so nothing typed at the card
+	-- reaches an omp pane behind it (Esc, which Tern's footer on every glimpse names, would stop omp's turn) and
+	-- Tern's Close block (Ctrl+Shift+W) closes the card, not that pane. Esc itself can't close it: Tern (0.9.36)
+	-- gives a canvas no keys and holds Esc in its own keymap, which shuts a plugin's bind out.
+	pcall(function()
+		cx.layout:focus(opened :: number)
+	end)
 end
 
 -- Download Update: the pending update, whichever window found it.

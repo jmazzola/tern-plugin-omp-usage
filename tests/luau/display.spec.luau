@@ -686,6 +686,20 @@ describe("Display, where the line sits", function()
 		ok(not has(solid, "backdrop-filter: blur(2.5px)"), "Solid as before")
 	end)
 
+	it("draws the same background under the panel's preview of the line, at rest only", function()
+		local function strip(kv: { [string]: any }?): string
+			local _, data, render = setup(kv)
+			return render.backdrop_css(data.load_settings(), ".stage .host", false)
+		end
+		local glass = strip(nil)
+		ok(has(glass, ".stage .host {\n\tbackground-color: light-dark("), "Glass, on the preview's own box")
+		ok(has(glass, "backdrop-filter: blur(2.5px) saturate(180%);") and has(glass, "radial-gradient(90% 160% at 0% 0%"), "the same glass")
+		ok(not has(glass, ":hover"), "no capsule to hover there")
+		eq(strip({ ["omp-usage.backdrop"] = "solid" }), ".stage .host {\n\tbackground-color: var(--ou-glass);\n}", "Solid")
+		eq(strip({ ["omp-usage.backdrop"] = "clear" }), "", "Clear")
+		ok(has(sheet_of(nil), ":hover {\n\tbackground-image: none;\n\tbackdrop-filter: none;\n}"), "the composer's capsule still takes the sheen off")
+	end)
+
 	it("redraws when a Display setting changes", function()
 		local _, data = setup()
 		local before = data.display_key(data.load_settings())

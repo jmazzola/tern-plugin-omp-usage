@@ -192,6 +192,7 @@ $P .oup-stage {
 	box-sizing: border-box;
 	justify-content: flex-end;
 	overflow-anchor: none;
+	position: relative;
 	padding: 14px 16px;
 	border-radius: 12px;
 	background-color: var(--code-bg);
@@ -224,6 +225,22 @@ $P .oup-line {
 	--ou-dim: var(--t4);
 	--ou-soft: var(--t3);
 	--ou-track: color-mix(in srgb, var(--t1) 13%, transparent);
+}
+/* what sits behind the line at rest (Line background): the composer's hover target, here a box of its own under
+   the line, 6px wider at each end as there, from the stage's padding box (`build.preview` sizes it and fills it
+   with render.luau's rules for the choice); never hovered, so it never turns into the capsule */
+$P .oup-host {
+	position: absolute;
+	left: 10px;
+	bottom: 14px;
+	height: 15px;
+	border-radius: 8px;
+	pointer-events: none;
+	background-color: transparent;
+	box-shadow: 0 0 0 1px transparent, 0 8px 20px -12px transparent, inset 0 1px 0 transparent;
+	transition:
+		background-color 0.2s var(--ease),
+		box-shadow 0.2s var(--ease);
 }
 $P .oup-empty {
 	font: 400 12px/18px var(--sans);
@@ -1171,6 +1188,19 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 		})
 	end
 	table.insert(rules, palette_css(preview, settings, PANEL .. " .oup-stage"))
+	-- the line's background, as wide as the line and its 6px at each end, or the stage where that is narrower
+	table.insert(
+		rules,
+		string.format(
+			"%s .oup-host {\n\twidth: min(%dpx, calc(100%% - 20px));%s\n}",
+			PANEL,
+			line.glyphs * 6 + 12,
+			if not stacked
+				then ""
+				else string.format("\n\theight: %dpx;", line_box) .. (if settings.align == "right" then "\n\tleft: auto;\n\tright: 10px;" else "")
+		)
+	)
+	table.insert(rules, render.backdrop_css(settings, PANEL .. " .oup-host", false))
 	local rest = tips(line, 55)
 	table.insert(
 		rules,
@@ -1215,6 +1245,7 @@ function build.preview(settings: Settings, preview: Model, rules: { string }, hi
 	local children: { Node } = {
 		ui.el("div", { class = "oup-stage" }, {
 			ui.el("div", { class = "oup-card" }),
+			ui.el("div", { class = "oup-host" }),
 			ui.el("div", { class = "oup-line", text = line.text }),
 		}),
 		height,

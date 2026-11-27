@@ -560,6 +560,9 @@ function M.show(cx: WindowCx, rows: { Row }, palette: string, signature: string,
 	})
 	if pane then
 		M.pane, M.signature = pane, signature
+		-- The keyboard is the details' while they show, so Tern's Close block (Ctrl+Shift+W) closes them and Esc
+		-- can't reach an omp pane behind them. Esc doesn't close them, whatever Tern's footer on a glimpse says:
+		-- Tern (0.9.36) gives a canvas no keys and holds Esc in its own keymap, which shuts a plugin's bind out.
 		cx.layout:focus(pane)
 	else
 		cx:toast("error", "Usage details didn't open", err)
